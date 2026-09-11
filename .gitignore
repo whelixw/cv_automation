@@ -188,6 +188,13 @@ render_command.prof
 # Executables:
 bin/
 
+# Local development tools and generated smoke-test output:
+.tools/
+examples/local-smoke-output/
+
+# Private CV source material and tailored applications. This repository is public.
+cv-private/
+
 # Coverage:
 coverage.md
 
