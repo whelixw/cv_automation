@@ -7,9 +7,9 @@
 - Do not overstate familiarity as practical or professional experience.
 - Use a direct, professional, natural tone and concise paragraphs rather than bullet points.
 - Preserve the supplied LaTeX layout unless a change is requested.
+- Use `cv-workspace/templates/cover_letter_template.tex` as the formatting reference.
 - Compile the LaTeX, inspect the rendered PDF, and wait for approval.
 
 ## Personal preferences
 
 Add standing preferences for tone, structure, wording, content to avoid, and sign-off here.
-
