@@ -56,3 +56,7 @@ create-executable:
 # Utilities:
 count-lines:
   wc -l `find src -name '*.py'`
+
+# CV automation:
+render-private job:
+  uv run rendercv render "cv-private/jobs/{{job}}/cv.yaml" --output-folder output --dont-generate-markdown --dont-generate-html --dont-generate-png --quiet

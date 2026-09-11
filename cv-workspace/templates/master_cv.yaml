@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=../../schema.json
+cv:
+  name: Your Name
+  headline:
+  location:
+  email:
+  phone:
+  website:
+  social_networks:
+  custom_connections:
+  sections:
+    experience: []
+    education: []
+    skills: []
+
+design:
+  theme: engineeringresumes
+
+locale:
+  language: english
+
+settings:
+  current_date: today
