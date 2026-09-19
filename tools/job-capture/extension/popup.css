@@ -2,6 +2,7 @@
 body { margin: 0; min-width: 320px; }
 main { padding: 16px; }
 h1 { font-size: 18px; margin: 0 0 14px; }
+h2 { font-size: 15px; margin: 18px 0 8px; }
 label { display: block; font-size: 12px; margin: 10px 0; }
 input, textarea { box-sizing: border-box; display: block; font: inherit; margin-top: 5px; padding: 8px; resize: vertical; width: 100%; }
 button { background: #2867b2; border: 0; border-radius: 6px; color: white; cursor: pointer; font-weight: 600; padding: 10px 12px; width: 100%; }
@@ -13,3 +14,7 @@ button:disabled { cursor: wait; opacity: .6; }
 #status.error { color: #d33; }
 #status.success { color: #27833f; }
 #prompt { font-size: 11px; }
+#automation-output { font-size: 12px; min-height: 180px; }
+#automation-status { font-size: 12px; }
+details { margin-top: 14px; }
+summary { cursor: pointer; font-size: 12px; }

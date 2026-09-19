@@ -16,10 +16,25 @@
       <label>Company <input id="company" autocomplete="organization"></label>
       <label>One-off instructions <textarea id="instructions" rows="4" placeholder="E.g. emphasize Python and bioinformatics"></textarea></label>
       <p id="extraction">Reading the current page…</p>
-      <button id="capture">Capture and prepare prompt</button>
+      <button id="capture">Capture and analyze</button>
       <p id="status" role="status"></p>
+      <section id="automation" hidden>
+        <h2 id="automation-title">Tailoring analysis</h2>
+        <p id="automation-status"></p>
+        <textarea id="automation-output" rows="12" readonly></textarea>
+        <button id="retry" class="secondary" hidden>Retry analysis</button>
+        <div id="approval" hidden>
+          <label>Answers or approval notes
+            <textarea id="answers" rows="5" placeholder="Answer any questions above, or write: No corrections; proceed."></textarea>
+          </label>
+          <button id="generate">Approve, generate, and render</button>
+        </div>
+      </section>
       <section id="result" hidden>
-        <label>Prompt <textarea id="prompt" rows="10" readonly></textarea></label>
+        <details>
+          <summary>Manual prompt fallback</summary>
+          <label>Prompt <textarea id="prompt" rows="10" readonly></textarea></label>
+        </details>
         <button id="copy" class="secondary">Copy prompt</button>
       </section>
     </main>

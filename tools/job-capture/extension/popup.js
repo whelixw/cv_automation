@@ -1,7 +1,11 @@
 const API = "http://127.0.0.1:8765";
 const DRAFT_PREFIX = "draft:";
+const AUTOMATION_PREFIX = "automation:";
 let capturedPage = null;
 let currentDraftKey = null;
+let currentAutomationKey = null;
+let jobDirectory = null;
+let currentAutomationPhase = "analyze";
 
 function extractJobPage() {
   const clean = (value) => String(value || "")
@@ -77,7 +81,8 @@ async function saveDraft() {
     [currentDraftKey]: {
       title: document.querySelector("#title").value,
       company: document.querySelector("#company").value,
-      instructions: document.querySelector("#instructions").value
+      instructions: document.querySelector("#instructions").value,
+      answers: document.querySelector("#answers").value
     }
   });
 }
@@ -104,12 +109,31 @@ async function readCurrentPage(requestAccess = false) {
     const [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractJobPage });
     capturedPage = result;
     currentDraftKey = `${DRAFT_PREFIX}${result.url}`;
-    const stored = await chrome.storage.local.get(currentDraftKey);
+    currentAutomationKey = `${AUTOMATION_PREFIX}${result.url}`;
+    const stored = await chrome.storage.local.get([currentDraftKey, currentAutomationKey]);
     const draft = stored[currentDraftKey] || {};
     document.querySelector("#title").value = draft.title || result.title;
     document.querySelector("#company").value = draft.company || result.company;
     document.querySelector("#instructions").value = draft.instructions || "";
+    document.querySelector("#answers").value = draft.answers || "";
     document.querySelector("#extraction").textContent = `Using ${result.source} (${result.description.length.toLocaleString()} characters). Drafts are saved automatically.`;
+    const automation = stored[currentAutomationKey];
+    if (automation) {
+      jobDirectory = automation.directory;
+      currentAutomationPhase = automation.phase;
+      document.querySelector("#automation").hidden = false;
+      document.querySelector("#automation-title").textContent = automation.phase === "generate" ? "Generation result" : "Tailoring analysis";
+      document.querySelector("#automation-output").value = automation.result || "";
+      if (automation.status === "complete" && automation.phase === "analyze") {
+        document.querySelector("#generate").disabled = false;
+        document.querySelector("#approval").hidden = false;
+      } else if (automation.status === "running" || automation.status === "queued") {
+        pollAutomation(automation.taskId, automation.phase);
+      } else if (automation.status === "failed") {
+        document.querySelector("#retry").textContent = automation.phase === "generate" ? "Retry generation" : "Retry analysis";
+        document.querySelector("#retry").hidden = false;
+      }
+    }
   } catch (error) {
     capturedPage = null;
     document.querySelector("#extraction").textContent = "Could not read the current page.";
@@ -117,7 +141,61 @@ async function readCurrentPage(requestAccess = false) {
   }
 }
 
-for (const id of ["title", "company", "instructions"]) {
+async function rememberAutomation(value) {
+  if (currentAutomationKey) await chrome.storage.local.set({ [currentAutomationKey]: value });
+}
+
+async function pollAutomation(taskId, phase) {
+  currentAutomationPhase = phase;
+  const statusElement = document.querySelector("#automation-status");
+  document.querySelector("#automation").hidden = false;
+  document.querySelector("#approval").hidden = true;
+  document.querySelector("#retry").hidden = true;
+  statusElement.textContent = phase === "analyze" ? "Codex is analyzing the application…" : "Codex is generating and rendering the documents…";
+  try {
+    const response = await fetch(`${API}/automation/status?id=${encodeURIComponent(taskId)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
+    const task = data.task;
+    if (task.status === "queued" || task.status === "running") {
+      await rememberAutomation({ taskId, phase, directory: jobDirectory, status: task.status, result: "" });
+      setTimeout(() => pollAutomation(taskId, phase), 2000);
+      return;
+    }
+    if (task.status === "failed") throw new Error(task.error || "Codex automation failed.");
+    document.querySelector("#automation-output").value = task.result;
+    statusElement.textContent = phase === "analyze" ? "Analysis complete. Review it before approving generation." : "Generation finished. Review the files listed below.";
+    if (phase === "analyze") document.querySelector("#generate").disabled = false;
+    document.querySelector("#approval").hidden = phase !== "analyze";
+    await rememberAutomation({ taskId, phase, directory: jobDirectory, status: "complete", result: task.result });
+  } catch (error) {
+    statusElement.textContent = `Automation error: ${error.message}`;
+    document.querySelector("#retry").textContent = phase === "generate" ? "Retry generation" : "Retry analysis";
+    document.querySelector("#retry").hidden = false;
+    await rememberAutomation({ taskId, phase, directory: jobDirectory, status: "failed", result: error.message });
+  }
+}
+
+async function startAutomation(phase, answers = "") {
+  currentAutomationPhase = phase;
+  if (phase === "analyze") document.querySelector("#generate").disabled = false;
+  document.querySelector("#automation").hidden = false;
+  document.querySelector("#automation-title").textContent = phase === "generate" ? "Generation result" : "Tailoring analysis";
+  document.querySelector("#automation-output").value = "";
+  document.querySelector("#approval").hidden = true;
+  document.querySelector("#retry").hidden = true;
+  const response = await fetch(`${API}/automation/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phase, directory: jobDirectory, answers })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
+  await rememberAutomation({ taskId: data.task.id, phase, directory: jobDirectory, status: "queued", result: "" });
+  pollAutomation(data.task.id, phase);
+}
+
+for (const id of ["title", "company", "instructions", "answers"]) {
   document.querySelector(`#${id}`).addEventListener("input", saveDraft);
 }
 document.querySelector("#refresh").addEventListener("click", () => readCurrentPage(true));
@@ -146,12 +224,34 @@ document.querySelector("#capture").addEventListener("click", async () => {
     if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
     document.querySelector("#prompt").value = data.prompt;
     document.querySelector("#result").hidden = false;
-    setStatus(`Saved to ${data.directory}`, "success");
+    jobDirectory = data.directory;
+    setStatus(`Saved to ${data.directory}. Starting analysis…`, "success");
+    await startAutomation("analyze");
   } catch (error) {
     const hint = error instanceof TypeError ? " Start the local Python server first." : "";
     setStatus(`${error.message}.${hint}`, "error");
   } finally {
     button.disabled = false;
+  }
+});
+
+document.querySelector("#generate").addEventListener("click", async () => {
+  const button = document.querySelector("#generate");
+  button.disabled = true;
+  try {
+    await startAutomation("generate", document.querySelector("#answers").value);
+  } catch (error) {
+    document.querySelector("#automation-status").textContent = `Could not start generation: ${error.message}`;
+    button.disabled = false;
+  }
+});
+
+document.querySelector("#retry").addEventListener("click", async () => {
+  try {
+    const answers = currentAutomationPhase === "generate" ? document.querySelector("#answers").value : "";
+    await startAutomation(currentAutomationPhase, answers);
+  } catch (error) {
+    document.querySelector("#automation-status").textContent = `Could not retry analysis: ${error.message}`;
   }
 });
 
