@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RenderCV Job Capture</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>RenderCV Job Capture</h1>
+      <div class="toolbar">
+        <button id="refresh" class="secondary">Read current page</button>
+      </div>
+      <label>Role <input id="title" autocomplete="off"></label>
+      <label>Company <input id="company" autocomplete="organization"></label>
+      <label>One-off instructions <textarea id="instructions" rows="4" placeholder="E.g. emphasize Python and bioinformatics"></textarea></label>
+      <p id="extraction">Reading the current page…</p>
+      <button id="capture">Capture and prepare prompt</button>
+      <p id="status" role="status"></p>
+      <section id="result" hidden>
+        <label>Prompt <textarea id="prompt" rows="10" readonly></textarea></label>
+        <button id="copy" class="secondary">Copy prompt</button>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
