@@ -114,6 +114,12 @@ def run_automation(task_id: str, phase: str, relative_directory: str, answers: s
     command = [
         codex,
         "exec",
+        # Per-run workaround for elevated setup failing on a locked node_repl.exe.
+        # Phase-specific read-only/workspace-write policies still apply.
+        "-c",
+        'windows.sandbox="unelevated"',
+        "-c",
+        "mcp_servers.node_repl.enabled=false",
         "--cd",
         str(PROJECT_ROOT),
         "--skip-git-repo-check",
@@ -140,6 +146,13 @@ def run_automation(task_id: str, phase: str, relative_directory: str, answers: s
             check=False,
         )
         output = result.stdout.strip()
+        if "setup refresh had errors" in result.stderr:
+            update_task(
+                task_id,
+                status="failed",
+                error="Codex Windows sandbox setup failed. The workflow could not read its source files.",
+            )
+            return
         if result.returncode != 0:
             error = result.stderr.strip() or output or f"Codex exited with code {result.returncode}."
             if "attempt to write a readonly database" in error or "Access is denied" in error:

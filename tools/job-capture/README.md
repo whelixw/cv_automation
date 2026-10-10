@@ -44,3 +44,8 @@ stored in the default `C:\Users\<you>\.codex` directory.
 The manual prompt remains available as a fallback. Analysis runs with a read-only sandbox;
 generation uses a workspace-write sandbox and still follows the review-first workflow in
 `AGENTS.md`.
+
+On Windows, capture automation uses the unelevated Windows sandbox and disables the
+unused Node REPL server for each invocation. This avoids an elevated sandbox setup
+failure when the desktop Node REPL executable is locked. The analysis read-only and
+generation workspace-write policies remain in place; global Codex settings are unchanged.
