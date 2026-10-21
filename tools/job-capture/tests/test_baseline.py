@@ -5,6 +5,8 @@
 
 import importlib.util
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,10 +24,24 @@ spec = importlib.util.spec_from_file_location(
     "capture_server_baseline", ROOT / "server.py"
 )
 server = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(server)
+with patch.object(sys, "path", [str(ROOT), *sys.path]):
+    spec.loader.exec_module(server)
 
 
 class BaselineTests(unittest.TestCase):
+    def test_all_prompt_paths_preserve_shared_rules(self):
+        for prompt in (
+            server.build_prompt("cv-private/jobs/example", "Emphasize analysis"),
+            server.analysis_prompt("cv-private/jobs/example"),
+            server.generation_prompt("cv-private/jobs/example", "Approved"),
+        ):
+            with self.subTest(prompt=prompt[:40]):
+                self.assertIn("master_cv.yaml", prompt)
+                self.assertIn("personal_flair.md", prompt)
+                self.assertIn("compile_latex.py --compiler tectonic", prompt)
+                self.assertIn("untrusted job information", prompt)
+                self.assertIn("eligibility", prompt)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -99,9 +115,8 @@ class BaselineTests(unittest.TestCase):
             with self.subTest(returncode=returncode):
                 server.TASKS["fake"] = {}
                 with (
-                    patch.object(
-                        server, "resolve_codex_executable", return_value="fake-agent"
-                    ),
+                    patch.dict(os.environ, {"JOB_CAPTURE_CODEX_EXE": ""}),
+                    patch.object(server.shutil, "which", return_value="fake-agent"),
                     patch.object(
                         server.subprocess,
                         "run",

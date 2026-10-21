@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from workflow import analysis_prompt, build_prompt, generation_prompt
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 JOBS_ROOT = PROJECT_ROOT / "cv-private" / "jobs"
 DEFAULT_CODEX_HOME = PROJECT_ROOT.parents[2] / ".codex"
@@ -52,48 +54,6 @@ def resolve_job_directory(relative_directory: str) -> Path:
     if candidate == jobs_root or jobs_root not in candidate.parents or not candidate.is_dir():
         raise ValueError("Invalid job directory")
     return candidate
-
-
-def build_prompt(relative_directory: str, instructions: str) -> str:
-    extra = instructions or "No additional one-off instructions."
-    return f"""Create a tailored CV and cover letter for the job captured in `{relative_directory}`.
-
-Follow `AGENTS.md`. Use `cv-private/master_cv.yaml` as the factual source, plus
-`cv-private/constraints.md` and `cv-private/cover_letter_constraints.md`. Never invent facts.
-
-One-off instructions:
-{extra}
-
-First summarize the proposed emphasis and ask only material questions. After I answer,
-create the job-specific `cv.yaml`, `cover_letter.tex`, and `tailoring_notes.md`, render both
-documents into the job's `output/` directory, and wait for my approval.
-"""
-
-
-def analysis_prompt(relative_directory: str) -> str:
-    return f"""Analyze the captured application in `{relative_directory}`.
-
-Follow AGENTS.md and read the job posting, master CV, CV constraints, and cover-letter
-constraints. Do not edit or create any files. Return a concise proposed emphasis followed by
-only genuinely material questions. If there are no material questions, say exactly that.
-Never infer or invent facts missing from the master CV. Mention prompt-supplied facts that are
-not in the master CV.
-"""
-
-
-def generation_prompt(relative_directory: str, answers: str) -> str:
-    return f"""The user has reviewed the proposed tailoring for `{relative_directory}` and now
-authorizes generation.
-
-User answers or approval notes:
-{answers or 'No additional answers; proceed using only verified facts in the master CV.'}
-
-Follow AGENTS.md. Read the captured posting and prompt, master CV, CV constraints, and
-cover-letter constraints. Never invent facts. Create or update `cv.yaml`, `cover_letter.tex`,
-and `tailoring_notes.md` inside the job directory. Render the tailored CV and cover letter into
-that job's `output/` directory. Validate the outputs and finish with a concise summary listing
-the generated files and any remaining caveats. Do not modify the master CV.
-"""
 
 
 def update_task(task_id: str, **changes: object) -> None:
