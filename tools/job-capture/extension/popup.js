@@ -8,16 +8,91 @@ let jobDirectory = null;
 let currentAutomationPhase = "analyze";
 
 function extractJobPage() {
-  const clean = (value) => String(value || "")
+  const cleanInline = (value) => String(value || "")
     .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
+    .replace(/&nbsp;|\u00a0/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/\s+/g, " ")
     .trim();
+  const cleanMarkdown = (value) => String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\t\f\v\u00a0]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/ +([,.;:!?])/g, "$1")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    // LinkedIn sometimes renders its expansion control as ordinary trailing text.
+    .replace(/(?:\.{3}|…)\s*more\s*$/i, "")
+    .trim();
+
+  const nodeToMarkdown = (node, listDepth = 0) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (node.nodeValue || "").replace(/\s+/g, " ");
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+
+    const tag = node.tagName.toLowerCase();
+    if (["script", "style", "noscript", "svg", "button", "form", "dialog", "nav", "footer", "aside"].includes(tag)) return "";
+    const children = () => Array.from(node.childNodes)
+      .map((child) => nodeToMarkdown(child, listDepth))
+      .join("");
+
+    if (tag === "br") return "\n";
+    if (/^h[1-6]$/.test(tag)) return `${"#".repeat(Number(tag[1]))} ${children().trim()}\n\n`;
+    if (tag === "strong" || tag === "b") return `**${children().trim()}**`;
+    if (tag === "em" || tag === "i") return `*${children().trim()}*`;
+    if (tag === "a") {
+      const label = children().trim();
+      const href = node.getAttribute("href") || "";
+      return label && /^https?:\/\//i.test(href) ? `[${label}](${href})` : label;
+    }
+    if (tag === "ul" || tag === "ol") {
+      const ordered = tag === "ol";
+      const items = Array.from(node.children).filter((child) => child.tagName.toLowerCase() === "li");
+      return `\n\n${items.map((item, index) => {
+        const nestedLists = Array.from(item.children).filter((child) => ["ul", "ol"].includes(child.tagName.toLowerCase()));
+        const clone = item.cloneNode(true);
+        Array.from(clone.children)
+          .filter((child) => ["ul", "ol"].includes(child.tagName.toLowerCase()))
+          .forEach((child) => child.remove());
+        const content = Array.from(clone.childNodes).map((child) => nodeToMarkdown(child, listDepth + 1)).join("").trim();
+        const prefix = ordered ? `${index + 1}.` : "-";
+        const nested = nestedLists.map((list) => nodeToMarkdown(list, listDepth + 1).trimEnd()).join("\n");
+        return `${"  ".repeat(listDepth)}${prefix} ${content}${nested ? `\n${nested}` : ""}`;
+      }).join("\n")}\n\n`;
+    }
+    if (tag === "li") return children();
+    if (tag === "p" || tag === "div" || tag === "section" || tag === "article" || tag === "blockquote") {
+      const content = children().trim();
+      return content ? `${content}\n\n` : "";
+    }
+    if (tag === "tr") return `${children().trim()}\n`;
+    if (tag === "td" || tag === "th") return `${children().trim()} | `;
+    return children();
+  };
+
+  const elementToMarkdown = (element) => {
+    if (!element) return "";
+    const clone = element.cloneNode(true);
+    clone.querySelectorAll([
+      "script", "style", "noscript", "svg", "button", "form", "dialog",
+      "nav", "footer", "aside",
+      "[hidden]", "[aria-hidden='true']", ".visually-hidden", ".artdeco-button"
+    ].join(",")).forEach((item) => item.remove());
+    return cleanMarkdown(nodeToMarkdown(clone));
+  };
+
+  const htmlToMarkdown = (value) => {
+    const documentFragment = new DOMParser().parseFromString(String(value || ""), "text/html");
+    return elementToMarkdown(documentFragment.body);
+  };
+
   const firstText = (...selectors) => {
     for (const selector of selectors) {
       const element = document.querySelector(selector);
-      const value = clean(element?.content || element?.innerText || element?.textContent);
+      const value = cleanInline(element?.content || element?.innerText || element?.textContent);
       if (value) return value;
     }
     return "";
@@ -35,15 +110,64 @@ function extractJobPage() {
       (Array.isArray(parsed) ? parsed : [parsed]).forEach(collectPosting);
     } catch (_) { /* Ignore malformed third-party metadata. */ }
   }
-  const posting = jobPostings[0];
-  const selected = clean(window.getSelection()?.toString());
-  const linkedInDescription = document.querySelector(
-    ".jobs-description__content, .jobs-box__html-content, .jobs-description-content__text, #job-details"
-  );
-  const description = selected || clean(posting?.description) || clean(linkedInDescription?.innerText) || clean(document.body.innerText);
-  const titleParts = clean(document.title).split(/\s*[|·–]\s*/);
+  const posting = jobPostings.sort((left, right) =>
+    cleanInline(right.description).length - cleanInline(left.description).length
+  )[0];
+  const selection = window.getSelection();
+  let selected = "";
+  if (selection && !selection.isCollapsed && selection.rangeCount) {
+    const container = document.createElement("div");
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+      container.append(selection.getRangeAt(index).cloneContents());
+    }
+    selected = elementToMarkdown(container) || cleanMarkdown(selection.toString());
+  }
+  const descriptionSelectors = [
+    "#job-details",
+    ".jobs-description__content",
+    ".jobs-description__container",
+    ".jobs-box__html-content",
+    ".jobs-description-content__text",
+    "[data-job-description]",
+    "[itemprop='description']",
+    "[data-testid*='job-description']",
+    "[class*='job-description']"
+  ];
+  let jobDescription = null;
+  for (const selector of descriptionSelectors) {
+    const candidates = Array.from(document.querySelectorAll(selector))
+      .map((element) => ({ element, length: cleanInline(element.innerText || element.textContent).length }))
+      .filter((candidate) => candidate.length >= 120)
+      .sort((left, right) => right.length - left.length);
+    if (candidates.length) {
+      jobDescription = candidates[0].element;
+      break;
+    }
+  }
+  let linkedInFallback = "";
+  if (/(^|\.)linkedin\.com$/i.test(location.hostname)) {
+    const pageText = String(document.body.innerText || "").replace(/\r\n?/g, "\n");
+    const startMatch = /(?:^|\n)About the job\s*(?:\n|$)/i.exec(pageText);
+    if (startMatch) {
+      const start = startMatch.index + startMatch[0].length;
+      const remainder = pageText.slice(start);
+      const endMarkers = [
+        /(?:^|\n)See how you compare to others who clicked apply\s*(?:\n|$)/i,
+        /(?:^|\n)About the company\s*(?:\n|$)/i,
+        /(?:^|\n)People also viewed\s*(?:\n|$)/i,
+        /(?:^|\n)Similar jobs\s*(?:\n|$)/i
+      ];
+      const endings = endMarkers
+        .map((pattern) => pattern.exec(remainder)?.index)
+        .filter((index) => Number.isInteger(index));
+      linkedInFallback = cleanMarkdown(remainder.slice(0, endings.length ? Math.min(...endings) : undefined));
+    }
+  }
+  const structuredDescription = posting?.description ? htmlToMarkdown(posting.description) : "";
+  const description = selected || structuredDescription || elementToMarkdown(jobDescription) || linkedInFallback || cleanMarkdown(document.body.innerText);
+  const titleParts = cleanInline(document.title).split(/\s*[|·–]\s*/);
   const titleFromDocument = titleParts[0];
-  const detectedTitle = clean(posting?.title) || firstText(
+  const detectedTitle = cleanInline(posting?.title) || firstText(
     ".job-details-jobs-unified-top-card__job-title h1",
     ".job-details-jobs-unified-top-card__job-title",
     ".jobs-unified-top-card__job-title",
@@ -52,7 +176,7 @@ function extractJobPage() {
     'meta[property="og:title"]'
   );
   const title = detectedTitle.split(/\s*[|·–]\s*/)[0] || titleFromDocument;
-  const company = clean(posting?.hiringOrganization?.name) || firstText(
+  const company = cleanInline(posting?.hiringOrganization?.name) || firstText(
     ".job-details-jobs-unified-top-card__company-name a",
     ".job-details-jobs-unified-top-card__company-name",
     ".jobs-unified-top-card__company-name",
@@ -65,7 +189,7 @@ function extractJobPage() {
     company,
     description,
     url: location.href,
-    source: selected ? "selected text" : posting ? "structured job data" : linkedInDescription ? "job description" : "page text"
+    source: selected ? "selected text" : structuredDescription ? "structured job data" : jobDescription ? "job description" : linkedInFallback ? "LinkedIn job section" : "page text"
   };
 }
 
