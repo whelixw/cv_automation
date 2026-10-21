@@ -2,6 +2,13 @@
 
 Status: proposed plan, based on the existing prototype and product direction discussed on 20 October 2026. Phases describe delivery order, not committed dates.
 
+Implementation progress (21 October 2026): architecture decisions, draft v1 contracts,
+offline companion baseline, and shared prompt guidance are implemented. The first
+picker slice provides one-section selection, editable capture preview, review
+confirmation, and browser fixture tests; see `PICKER.md`. Phase 0's live
+browser-to-agent-to-PDF baseline remains unverified. Phase 1's field mapping,
+multiple blocks/exclusions, and real-site acceptance checks remain outstanding.
+
 ## Product vision
 
 An installable browser extension and local companion that turn a job posting on different websites into a reviewed, tailored application. Users can point to page elements like an adblocker picker, teach the tool how to read a site, work with an agent, and generate polished documents using RenderCV and LaTeX.

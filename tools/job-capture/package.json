@@ -1,0 +1,10 @@
+{
+  "name": "rendercv-job-capture-dev",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/picker.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

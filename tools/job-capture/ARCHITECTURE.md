@@ -84,5 +84,6 @@ extraction or real rendering. See `BASELINE.md` for the manual integration check
 Subsequent implementation: picker -> recipes -> durable orchestration/reference
 library -> document review -> distribution. Introduce adapters one boundary at a
 time. Do not switch persistence or transport in the same change as the picker.
-Future prompt refactoring must preserve AGENTS.md rules and the baseline tests;
-centralize duplicated policy then, without committing unrelated current changes.
+Shared prompt policy now lives in `workflow.py`; AGENTS.md remains authoritative.
+The server imports these builders for manual prompts, analysis and generation.
+See `PICKER.md` for the first visual selection slice and its browser checks.

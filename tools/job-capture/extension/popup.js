@@ -7,7 +7,7 @@ let currentAutomationKey = null;
 let jobDirectory = null;
 let currentAutomationPhase = "analyze";
 
-function extractJobPage() {
+function extractJobPage(picked = null) {
   const cleanInline = (value) => String(value || "")
     .replace(/<[^>]*>/g, " ")
     .replace(/&nbsp;|\u00a0/gi, " ")
@@ -114,8 +114,8 @@ function extractJobPage() {
     cleanInline(right.description).length - cleanInline(left.description).length
   )[0];
   const selection = window.getSelection();
-  let selected = "";
-  if (selection && !selection.isCollapsed && selection.rangeCount) {
+  let selected = picked?.html ? htmlToMarkdown(picked.html) : "";
+  if (!picked && selection && !selection.isCollapsed && selection.rangeCount) {
     const container = document.createElement("div");
     for (let index = 0; index < selection.rangeCount; index += 1) {
       container.append(selection.getRangeAt(index).cloneContents());
@@ -206,6 +206,7 @@ async function saveDraft() {
       title: document.querySelector("#title").value,
       company: document.querySelector("#company").value,
       instructions: document.querySelector("#instructions").value,
+      description: document.querySelector("#description").value,
       answers: document.querySelector("#answers").value
     }
   });
@@ -238,6 +239,8 @@ async function readCurrentPage(requestAccess = false) {
     const draft = stored[currentDraftKey] || {};
     document.querySelector("#title").value = draft.title || result.title;
     document.querySelector("#company").value = draft.company || result.company;
+    document.querySelector("#description").value = draft.description ?? result.description;
+    document.querySelector("#confirm-description").checked = false;
     document.querySelector("#instructions").value = draft.instructions || "";
     document.querySelector("#answers").value = draft.answers || "";
     document.querySelector("#extraction").textContent = `Using ${result.source} (${result.description.length.toLocaleString()} characters). Drafts are saved automatically.`;
@@ -319,9 +322,62 @@ async function startAutomation(phase, answers = "") {
   pollAutomation(data.task.id, phase);
 }
 
-for (const id of ["title", "company", "instructions", "answers"]) {
+for (const id of ["title", "company", "instructions", "answers", "description"]) {
   document.querySelector(`#${id}`).addEventListener("input", saveDraft);
 }
+
+for (const id of ["title", "company", "description"]) {
+  document.querySelector(`#${id}`).addEventListener("input", () => {
+    document.querySelector("#confirm-description").checked = false;
+  });
+}
+
+document.querySelector("#pick").addEventListener("click", async () => {
+  const button = document.querySelector("#pick");
+  button.disabled = true;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const pattern = permissionPattern(tab.url);
+    if (!pattern) throw new Error("Open a job posting on an HTTP or HTTPS page first.");
+    if (!await chrome.permissions.contains({ origins: [pattern] }) &&
+        !await chrome.permissions.request({ origins: [pattern] })) {
+      throw new Error("Page access was not granted.");
+    }
+    setStatus("Point to the description on the page. Use ↑ for a larger section, Enter to select, or Esc to cancel.");
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["picker.js"] });
+    const [{ result: picked }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, func: () => globalThis.rendercvPickElement()
+    });
+    if (!picked || picked.cancelled) {
+      setStatus(picked?.error || "Selection cancelled. Your draft is unchanged.");
+      return;
+    }
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active.id !== tab.id || active.url !== picked.url) throw new Error("The page changed. Select the description again.");
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, func: extractJobPage, args: [picked]
+    });
+    if (result.url !== picked.url) throw new Error("The page changed. Select the description again.");
+    // Empty selections must not silently fall back to capturing the whole page.
+    if (!result.description.trim() || result.source !== "selected text") {
+      throw new Error("This section contains no readable description. Select a larger section or paste the text.");
+    }
+    if (capturedPage?.url !== result.url) {
+      await readCurrentPage();
+      if (capturedPage?.url !== result.url) throw new Error("Read the current page and try again.");
+    }
+    capturedPage = { ...result, source: "visual selection" };
+    document.querySelector("#description").value = result.description;
+    document.querySelector("#confirm-description").checked = false;
+    document.querySelector("#extraction").textContent = `Using your visual selection (${result.description.length.toLocaleString()} characters).`;
+    await saveDraft();
+    setStatus("Selection ready. Review the description, role, and company before capturing.", "success");
+  } catch (error) {
+    setStatus(`Could not select this page: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 document.querySelector("#refresh").addEventListener("click", () => readCurrentPage(true));
 
 document.querySelector("#capture").addEventListener("click", async () => {
@@ -329,16 +385,27 @@ document.querySelector("#capture").addEventListener("click", async () => {
     setStatus("Read a job page before capturing it.", "error");
     return;
   }
+  if (!document.querySelector("#description").value.trim()) {
+    setStatus("Select or paste a job description before capturing.", "error");
+    return;
+  }
+  if (!document.querySelector("#confirm-description").checked) {
+    setStatus("Check the role, company, and description, then confirm your review.", "error");
+    return;
+  }
   const button = document.querySelector("#capture");
   button.disabled = true;
   setStatus("Saving job posting…");
   try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active.url !== capturedPage.url) throw new Error("The page changed. Read the current page before capturing.");
     await saveDraft();
     const response = await fetch(`${API}/capture`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...capturedPage,
+        description: document.querySelector("#description").value.trim(),
         title: document.querySelector("#title").value,
         company: document.querySelector("#company").value,
         instructions: document.querySelector("#instructions").value
