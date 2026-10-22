@@ -11,6 +11,13 @@ const source = fs.readFileSync(path.join(extension, 'popup.js'), 'utf8');
 const extractor = source.slice(source.indexOf('function extractJobPage'), source.indexOf('function setStatus'));
 const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/picker-job.html'), 'utf8');
 
+test('manifest permits URL discovery before requesting access to a new site', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.permissions.includes('tabs'));
+  assert.ok(manifest.optional_host_permissions.includes('https://*/*'));
+  assert.ok(!manifest.host_permissions.includes('https://*/*'));
+});
+
 async function browserFor(t) {
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -107,6 +114,19 @@ test('panel requires review, saves edited description and prevents capture after
   });
   await page.goto('http://extension.test/popup.html');
   await page.waitForFunction(() => document.querySelector('#description').value === 'Original description');
+  // Reproduce a persistent panel on a new domain before Chrome exposes Tab.url.
+  await page.evaluate(() => { delete window.fakeTab.url; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Reload the extension'));
+  assert.doesNotMatch(await page.locator('#status').textContent(), /Invalid URL/);
+  await page.locator('#pick').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Reload the extension'));
+  await page.evaluate(() => { window.fakeTab.url = 'chrome://extensions'; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('HTTP or HTTPS'));
+  await page.evaluate(() => { window.fakeTab.url = 'https://jobs.example.test/analyst'; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#description').value === 'Original description' && !document.querySelector('#status').textContent);
   await page.evaluate(() => {
     chrome.permissions.contains = async () => false;
     chrome.permissions.request = async () => false;

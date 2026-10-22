@@ -213,16 +213,28 @@ async function saveDraft() {
 }
 
 function permissionPattern(url) {
-  const parsed = new URL(url);
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_) {
+    throw new Error("Chrome did not provide this tab's address. Reload the extension in chrome://extensions, reopen the side panel, and try again.");
+  }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   return `${parsed.protocol}//${parsed.host}/*`;
+}
+
+async function activeJobTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !Number.isInteger(tab.id)) throw new Error("No active browser tab was found. Open a job posting and try again.");
+  if (!permissionPattern(tab.url)) throw new Error("Open a job posting on an HTTP or HTTPS page first.");
+  return tab;
 }
 
 async function readCurrentPage(requestAccess = false) {
   setStatus("");
   document.querySelector("#extraction").textContent = "Reading the current page…";
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await activeJobTab();
     const pattern = permissionPattern(tab.url);
     if (requestAccess && pattern) {
       const alreadyAllowed = await chrome.permissions.contains({ origins: [pattern] });
@@ -336,7 +348,7 @@ document.querySelector("#pick").addEventListener("click", async () => {
   const button = document.querySelector("#pick");
   button.disabled = true;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await activeJobTab();
     const pattern = permissionPattern(tab.url);
     if (!pattern) throw new Error("Open a job posting on an HTTP or HTTPS page first.");
     if (!await chrome.permissions.contains({ origins: [pattern] }) &&
@@ -352,7 +364,7 @@ document.querySelector("#pick").addEventListener("click", async () => {
       setStatus(picked?.error || "Selection cancelled. Your draft is unchanged.");
       return;
     }
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const active = await activeJobTab();
     if (active.id !== tab.id || active.url !== picked.url) throw new Error("The page changed. Select the description again.");
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id }, func: extractJobPage, args: [picked]
@@ -397,7 +409,7 @@ document.querySelector("#capture").addEventListener("click", async () => {
   button.disabled = true;
   setStatus("Saving job posting…");
   try {
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const active = await activeJobTab();
     if (active.url !== capturedPage.url) throw new Error("The page changed. Read the current page before capturing.");
     await saveDraft();
     const response = await fetch(`${API}/capture`, {

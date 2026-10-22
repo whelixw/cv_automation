@@ -1,6 +1,9 @@
 # Visual description picker: first slice
 
 Reload the unpacked extension after updating. Open a job posting and the side panel.
+If Chrome requests approval for the updated tab permission, accept it and reopen
+the panel. This lets the persistent panel identify the current site's address;
+reading the page still uses the separate site-access permission.
 
 1. Click **Select description on page**. Allow access to that site if requested.
 2. Point to the description. Press **↑** to select its enclosing section or **↓**

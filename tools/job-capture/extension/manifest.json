@@ -3,7 +3,7 @@
   "name": "RenderCV Job Capture",
   "version": "0.3.0",
   "description": "Capture a job posting and prepare a RenderCV tailoring prompt.",
-  "permissions": ["activeTab", "scripting", "clipboardWrite", "sidePanel", "storage"],
+  "permissions": ["activeTab", "tabs", "scripting", "clipboardWrite", "sidePanel", "storage"],
   "host_permissions": [
     "http://127.0.0.1:8765/*",
     "https://www.linkedin.com/*",
