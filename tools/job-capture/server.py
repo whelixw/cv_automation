@@ -9,13 +9,17 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
+import uuid
+from contextlib import nullcontext
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import documents
 from agent import AgentStopped, run_agent
 from security import Pairing
 from store import Store
@@ -83,93 +87,141 @@ def resolve_codex_executable() -> str | None:
 def run_automation(
     task_id: str, phase: str, relative_directory: str, answers: str
 ) -> None:
-    if store().task(task_id)["status"] == "cancelling":
+    def cancelled():
+        return store().task(task_id)["status"] in ("cancelling", "cancelled")
+
+    if cancelled():
         update_task(task_id, status="cancelled")
         return
-    update_task(task_id, status="running")
-    prompt = (
-        analysis_prompt(relative_directory)
+    update_task(
+        task_id,
+        status="running",
+        message="Analyzing"
         if phase == "analyze"
-        else generation_prompt(relative_directory, answers)
+        else "Preparing isolated generation workspace",
     )
     codex = resolve_codex_executable()
     if not codex:
         update_task(
             task_id,
             status="failed",
-            error="The Codex CLI was not found. Restart the server with start-job-capture.bat.",
+            error="The Codex CLI was not found. Configure JOB_CAPTURE_CODEX_EXE or restart the companion from its launcher.",
         )
         return
-
-    env = os.environ.copy()
-    env["CODEX_HOME"] = os.environ.get(
-        "JOB_CAPTURE_CODEX_HOME", str(DEFAULT_CODEX_HOME)
-    )
-    command = [
-        codex,
-        "exec",
-        # Per-run workaround for elevated setup failing on a locked node_repl.exe.
-        # Phase-specific read-only/workspace-write policies still apply.
-        "-c",
-        'windows.sandbox="unelevated"',
-        "-c",
-        "mcp_servers.node_repl.enabled=false",
-        "--cd",
-        str(PROJECT_ROOT),
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "--color",
-        "never",
-    ]
-    if phase in ("generate", "revise"):
-        command.append("--approve-for-me")
-    else:
-        command.extend(["--sandbox", "read-only"])
-    command.append("-")
+    generating = phase in ("generate", "revise")
+    job = None
+    destination = None
     try:
-        result = run_agent(
-            command,
-            prompt,
-            cwd=PROJECT_ROOT,
-            env=env,
-            cancelled=lambda: store().task(task_id)["status"] == "cancelling",
-            timeout=AUTOMATION_TIMEOUT_SECONDS,
+        context = (
+            tempfile.TemporaryDirectory(prefix="job-capture-")
+            if generating
+            else nullcontext(str(PROJECT_ROOT))
         )
-        output = result.stdout.strip()
-        if "setup refresh had errors" in result.stderr:
+        with context as work:
+            workspace = Path(work)
+            prompt = (
+                analysis_prompt(relative_directory)
+                if not generating
+                else generation_prompt(relative_directory, answers)
+            )
+            if generating:
+                destination = resolve_job_directory(relative_directory)
+                job, protected, references = documents.prepare(
+                    PROJECT_ROOT,
+                    relative_directory,
+                    workspace,
+                    revision=phase == "revise",
+                )
+                prompt += "\nRead reference-library/index.json and the relevant copied references. Generate sources only; do not render or run compilers. The companion will validate and render them. Create requirements.json with an items list of objects containing category and text. Include all application requirements; use an empty list only if the posting has none. Record uncertainties in tailoring_notes.md.\n"
+                if phase == "revise":
+                    prompt += "Revise the existing sources according to the user notes while preserving verified facts.\n"
+            command = [
+                codex,
+                "exec",
+                "-c",
+                'windows.sandbox="unelevated"',
+                "-c",
+                "mcp_servers.node_repl.enabled=false",
+                "--cd",
+                str(workspace),
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--color",
+                "never",
+                "--sandbox",
+                "workspace-write" if generating else "read-only",
+                "-",
+            ]
+            env = os.environ.copy()
+            env["CODEX_HOME"] = os.environ.get(
+                "JOB_CAPTURE_CODEX_HOME", str(DEFAULT_CODEX_HOME)
+            )
+            result = run_agent(
+                command,
+                prompt,
+                cwd=workspace,
+                env=env,
+                cancelled=cancelled,
+                timeout=AUTOMATION_TIMEOUT_SECONDS,
+            )
+            if result.returncode:
+                raise ValueError(
+                    (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or "Agent execution failed."
+                    )[-6000:]
+                )
+            if cancelled():
+                raise AgentStopped("Run cancelled; no version was published.")
+            if generating:
+                requirements = documents.validate_sources(job, protected)
+                update_task(task_id, message="Rendering and checking PDFs")
+                try:
+                    documents.render(job, cancelled)
+                except (ValueError, OSError, AgentStopped, subprocess.TimeoutExpired):
+                    logs = destination / "runs" / task_id
+                    logs.mkdir(parents=True, exist_ok=True)
+                    for path in (job / "output/qa").glob("*.log"):
+                        shutil.copyfile(
+                            documents.contained(job, path), logs / path.name
+                        )
+                    raise
+                if cancelled():
+                    raise AgentStopped("Run cancelled; no version was published.")
+                manifest = documents.publish(
+                    job, destination, task_id, references, requirements
+                )
+                application = store().application(relative_directory)
+                if application is None:
+                    application = {
+                        "directory": relative_directory,
+                        "title": destination.name,
+                        "company": "",
+                        "versions": [],
+                    }
+                application.setdefault("versions", []).append(
+                    {"id": task_id, "created": datetime.now().astimezone().isoformat()}
+                )
+                application.update(currentVersion=task_id, status="draft_ready")
+                store().save_application(application)
+                update_task(task_id, version=manifest["id"])
             update_task(
                 task_id,
-                status="failed",
-                error="Codex Windows sandbox setup failed. The workflow could not read its source files.",
+                status="complete",
+                result=result.stdout.strip()
+                or "Run complete. Review the generated documents before approval.",
             )
-            return
-        if result.returncode != 0:
-            error = (
-                result.stderr.strip()
-                or output
-                or f"Codex exited with code {result.returncode}."
-            )
-            if (
-                "attempt to write a readonly database" in error
-                or "Access is denied" in error
-            ):
-                error = (
-                    "Codex cannot write to its local state directory. Restart the Job Capture "
-                    "server from a normal Windows terminal under your user account."
-                )
-            update_task(task_id, status="failed", error=error[-6000:])
-            return
-        update_task(
-            task_id,
-            status="complete",
-            result=output or "Codex completed without a final message.",
-        )
     except AgentStopped as error:
         update_task(task_id, status="cancelled", error=str(error))
     except subprocess.TimeoutExpired:
-        update_task(task_id, status="failed", error="Codex timed out after 20 minutes.")
-    except OSError as error:
-        update_task(task_id, status="failed", error=f"Could not start Codex: {error}")
+        update_task(
+            task_id,
+            status="failed",
+            error="The agent or document renderer timed out. Previous versions are preserved.",
+        )
+    except (OSError, ValueError, RuntimeError, ImportError) as error:
+        update_task(task_id, status="failed", error=str(error))
 
 
 class CaptureHandler(BaseHTTPRequestHandler):
