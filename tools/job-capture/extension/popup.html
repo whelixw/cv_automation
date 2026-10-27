@@ -9,6 +9,11 @@
   <body>
     <main>
       <h1>RenderCV Job Capture</h1>
+      <details><summary>Companion connection</summary>
+        <p>Open <a href="http://127.0.0.1:8765/setup" target="_blank" rel="noopener">local companion setup</a>, copy its connection code here, and connect once.</p>
+        <label>Connection code <input id="connection-code" type="password" autocomplete="off"></label>
+        <button id="connect" class="secondary">Connect companion</button><p id="connection-status" role="status"></p>
+      </details>
       <div class="toolbar">
         <button id="refresh" class="secondary">Read current page</button>
         <button id="pick" class="secondary">Select description on page</button>
@@ -34,6 +39,7 @@
       <section id="automation" hidden>
         <h2 id="automation-title">Tailoring analysis</h2>
         <p id="automation-status"></p>
+        <button id="cancel-run" class="secondary" hidden>Cancel current run</button>
         <textarea id="automation-output" rows="12" readonly></textarea>
         <button id="retry" class="secondary" hidden>Retry analysis</button>
         <div id="approval" hidden>

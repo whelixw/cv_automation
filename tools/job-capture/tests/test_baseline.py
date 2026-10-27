@@ -51,13 +51,13 @@ class BaselineTests(unittest.TestCase):
         for name, value in (
             ("PROJECT_ROOT", self.root),
             ("JOBS_ROOT", self.jobs),
-            ("TASKS", {}),
         ):
             patcher = patch.object(server, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         # Exercise handlers without binding ports or launching an agent.
         self.handler = object.__new__(server.CaptureHandler)
+        self.handler._authorized = lambda: True
         self.responses = []
         self.handler._json = lambda payload, status=200: self.responses.append(
             (payload, status)
@@ -113,13 +113,13 @@ class BaselineTests(unittest.TestCase):
     def test_fake_agent_success_and_failure(self):
         for returncode, expected in ((0, "complete"), (1, "failed")):
             with self.subTest(returncode=returncode):
-                server.TASKS["fake"] = {}
+                task, _ = server.store().start("cv-private/jobs/example", "analyze")
                 with (
                     patch.dict(os.environ, {"JOB_CAPTURE_CODEX_EXE": ""}),
                     patch.object(server.shutil, "which", return_value="fake-agent"),
                     patch.object(
-                        server.subprocess,
-                        "run",
+                        server,
+                        "run_agent",
                         return_value=SimpleNamespace(
                             returncode=returncode,
                             stdout="Proposed emphasis",
@@ -128,9 +128,9 @@ class BaselineTests(unittest.TestCase):
                     ) as run,
                 ):
                     server.run_automation(
-                        "fake", "analyze", "cv-private/jobs/example", ""
+                        task["id"], "analyze", "cv-private/jobs/example", ""
                     )
-                self.assertEqual(server.TASKS["fake"]["status"], expected)
+                self.assertEqual(server.store().task(task["id"])["status"], expected)
                 self.assertIn("read-only", run.call_args.args[0])
 
 

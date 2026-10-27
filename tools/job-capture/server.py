@@ -10,13 +10,15 @@ import re
 import shutil
 import subprocess
 import threading
-import uuid
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from agent import AgentStopped, run_agent
+from security import Pairing
+from store import Store
 from workflow import analysis_prompt, build_prompt, generation_prompt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -24,9 +26,12 @@ JOBS_ROOT = PROJECT_ROOT / "cv-private" / "jobs"
 DEFAULT_CODEX_HOME = PROJECT_ROOT.parents[2] / ".codex"
 MAX_BODY_BYTES = 2_000_000
 AUTOMATION_TIMEOUT_SECONDS = 20 * 60
-TASKS: dict[str, dict[str, object]] = {}
-TASKS_LOCK = threading.Lock()
+PAIRING = None
 LOGGER = logging.getLogger("job-capture")
+
+
+def store():
+    return Store(PROJECT_ROOT / "cv-private" / ".job-capture" / "workflow.sqlite3")
 
 
 def slugify(value: str, fallback: str = "job") -> str:
@@ -44,33 +49,62 @@ def unique_job_directory(company: str, title: str) -> Path:
     candidate = JOBS_ROOT / base
     if not candidate.exists():
         return candidate
-    suffix = datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     return JOBS_ROOT / f"{base}-{suffix}"
 
 
 def resolve_job_directory(relative_directory: str) -> Path:
     candidate = (PROJECT_ROOT / relative_directory).resolve()
     jobs_root = JOBS_ROOT.resolve()
-    if candidate == jobs_root or jobs_root not in candidate.parents or not candidate.is_dir():
+    if (
+        candidate == jobs_root
+        or jobs_root not in candidate.parents
+        or not candidate.is_dir()
+    ):
         raise ValueError("Invalid job directory")
     return candidate
 
 
 def update_task(task_id: str, **changes: object) -> None:
-    with TASKS_LOCK:
-        TASKS[task_id].update(changes)
+    store().update(task_id, **changes)
 
 
-def run_automation(task_id: str, phase: str, relative_directory: str, answers: str) -> None:
+def resolve_codex_executable() -> str | None:
+    configured = os.environ.get("JOB_CAPTURE_CODEX_EXE", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+        LOGGER.error("JOB_CAPTURE_CODEX_EXE does not point to a file: %s", candidate)
+        return None
+    return shutil.which("codex")
+
+
+def run_automation(
+    task_id: str, phase: str, relative_directory: str, answers: str
+) -> None:
+    if store().task(task_id)["status"] == "cancelling":
+        update_task(task_id, status="cancelled")
+        return
     update_task(task_id, status="running")
-    prompt = analysis_prompt(relative_directory) if phase == "analyze" else generation_prompt(relative_directory, answers)
-    codex = shutil.which("codex")
+    prompt = (
+        analysis_prompt(relative_directory)
+        if phase == "analyze"
+        else generation_prompt(relative_directory, answers)
+    )
+    codex = resolve_codex_executable()
     if not codex:
-        update_task(task_id, status="failed", error="The Codex CLI was not found on PATH.")
+        update_task(
+            task_id,
+            status="failed",
+            error="The Codex CLI was not found. Restart the server with start-job-capture.bat.",
+        )
         return
 
     env = os.environ.copy()
-    env["CODEX_HOME"] = os.environ.get("JOB_CAPTURE_CODEX_HOME", str(DEFAULT_CODEX_HOME))
+    env["CODEX_HOME"] = os.environ.get(
+        "JOB_CAPTURE_CODEX_HOME", str(DEFAULT_CODEX_HOME)
+    )
     command = [
         codex,
         "exec",
@@ -87,23 +121,19 @@ def run_automation(task_id: str, phase: str, relative_directory: str, answers: s
         "--color",
         "never",
     ]
-    if phase == "generate":
+    if phase in ("generate", "revise"):
         command.append("--approve-for-me")
     else:
         command.extend(["--sandbox", "read-only"])
     command.append("-")
     try:
-        result = subprocess.run(
+        result = run_agent(
             command,
-            input=prompt,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
+            prompt,
             cwd=PROJECT_ROOT,
             env=env,
+            cancelled=lambda: store().task(task_id)["status"] == "cancelling",
             timeout=AUTOMATION_TIMEOUT_SECONDS,
-            check=False,
         )
         output = result.stdout.strip()
         if "setup refresh had errors" in result.stderr:
@@ -114,15 +144,28 @@ def run_automation(task_id: str, phase: str, relative_directory: str, answers: s
             )
             return
         if result.returncode != 0:
-            error = result.stderr.strip() or output or f"Codex exited with code {result.returncode}."
-            if "attempt to write a readonly database" in error or "Access is denied" in error:
+            error = (
+                result.stderr.strip()
+                or output
+                or f"Codex exited with code {result.returncode}."
+            )
+            if (
+                "attempt to write a readonly database" in error
+                or "Access is denied" in error
+            ):
                 error = (
                     "Codex cannot write to its local state directory. Restart the Job Capture "
                     "server from a normal Windows terminal under your user account."
                 )
             update_task(task_id, status="failed", error=error[-6000:])
             return
-        update_task(task_id, status="complete", result=output or "Codex completed without a final message.")
+        update_task(
+            task_id,
+            status="complete",
+            result=output or "Codex completed without a final message.",
+        )
+    except AgentStopped as error:
+        update_task(task_id, status="cancelled", error=str(error))
     except subprocess.TimeoutExpired:
         update_task(task_id, status="failed", error="Codex timed out after 20 minutes.")
     except OSError as error:
@@ -135,13 +178,24 @@ class CaptureHandler(BaseHTTPRequestHandler):
     def _headers(self, status: HTTPStatus = HTTPStatus.OK) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         origin = self.headers.get("Origin", "")
-        if origin.startswith("chrome-extension://"):
+        if Pairing.valid_origin(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header(
+            "Access-Control-Allow-Headers", "Content-Type, X-Job-Capture-Token"
+        )
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
+
+    def _authorized(self):
+        if PAIRING is None:
+            return False
+        host = self.headers.get("Host", "")
+        return host == f"127.0.0.1:{self.server.server_port}" and PAIRING.authorize(
+            self.headers.get("Origin", ""), self.headers.get("X-Job-Capture-Token", "")
+        )
 
     def _json(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
         self._headers(status)
@@ -157,23 +211,54 @@ class CaptureHandler(BaseHTTPRequestHandler):
         return value
 
     def do_OPTIONS(self) -> None:
-        if self.headers.get("Origin", "").startswith("chrome-extension://"):
+        if Pairing.valid_origin(self.headers.get("Origin", "")):
             self._headers(HTTPStatus.NO_CONTENT)
         else:
             self._headers(HTTPStatus.FORBIDDEN)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/setup" and PAIRING is not None:
+            if (
+                self.headers.get("Origin")
+                or self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+            ):
+                self._json(
+                    {"error": "Open setup directly in a local browser tab."},
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
+            )
+            self.end_headers()
+            self.wfile.write(
+                (
+                    "Job Capture: copy this connection code into the extension's Companion connection section.\n\n"
+                    + PAIRING.config["token"]
+                ).encode()
+            )
+            return
+        if parsed.path != "/health" and not self._authorized():
+            self._json(
+                {"error": "Connect the extension to the local companion first."},
+                HTTPStatus.UNAUTHORIZED,
+            )
+            return
         if parsed.path == "/health":
-            codex = shutil.which("codex")
-            self._json({"ok": True, "project": str(PROJECT_ROOT), "codexAvailable": bool(codex)})
+            codex = resolve_codex_executable()
+            self._json({"ok": True, "codexAvailable": bool(codex)})
         elif parsed.path == "/automation/status":
             task_id = parse_qs(parsed.query).get("id", [""])[0]
-            with TASKS_LOCK:
-                task = TASKS.get(task_id)
-                payload = dict(task) if task else None
+            payload = store().task(task_id)
             if payload:
-                self._json({"ok": True, "task": payload})
+                self._json(
+                    {"ok": True, "task": payload, "events": store().events(task_id)}
+                )
             else:
                 self._json({"error": "Unknown automation task"}, HTTPStatus.NOT_FOUND)
         else:
@@ -181,7 +266,32 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if not self.headers.get("Origin", "").startswith("chrome-extension://"):
-            self._json({"error": "Requests are accepted only from the Chrome extension."}, HTTPStatus.FORBIDDEN)
+            self._json(
+                {"error": "Requests are accepted only from the Chrome extension."},
+                HTTPStatus.FORBIDDEN,
+            )
+            return
+        if urlparse(self.path).path == "/pair" and PAIRING is not None:
+            if self.headers.get(
+                "Host"
+            ) == f"127.0.0.1:{self.server.server_port}" and PAIRING.pair(
+                self.headers.get("Origin", ""),
+                self.headers.get("X-Job-Capture-Token", ""),
+            ):
+                self._json({"ok": True})
+            else:
+                self._json(
+                    {
+                        "error": "Invalid connection code, or companion is paired with another extension."
+                    },
+                    HTTPStatus.FORBIDDEN,
+                )
+            return
+        if not self._authorized():
+            self._json(
+                {"error": "Connect the extension to the local companion first."},
+                HTTPStatus.UNAUTHORIZED,
+            )
             return
         try:
             path = urlparse(self.path).path
@@ -189,12 +299,22 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 self._capture(self._request_json())
             elif path == "/automation/start":
                 self._start_automation(self._request_json())
+            elif path == "/automation/cancel":
+                task = store().task(str(self._request_json().get("id", "")))
+                if not task:
+                    raise ValueError("Unknown automation task")
+                if task["status"] in ("queued", "running"):
+                    task = store().update(task["id"], status="cancelling")
+                self._json({"ok": True, "task": task})
             else:
                 self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except OSError as error:
-            self._json({"error": f"Local operation failed: {error}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._json(
+                {"error": f"Local operation failed: {error}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
     def _capture(self, data: dict) -> None:
         title = markdown_value(str(data.get("title", "")))
@@ -203,17 +323,21 @@ class CaptureHandler(BaseHTTPRequestHandler):
         url = markdown_value(str(data.get("url", "")))
         instructions = markdown_value(str(data.get("instructions", "")))
         if not description:
-            raise ValueError("No job description was found. Select the posting text and try again.")
+            raise ValueError(
+                "No job description was found. Select the posting text and try again."
+            )
 
-        job_dir = unique_job_directory(company or "unknown-company", title or "unknown-role")
+        job_dir = unique_job_directory(
+            company or "unknown-company", title or "unknown-role"
+        )
         job_dir.mkdir(parents=True)
         relative = job_dir.relative_to(PROJECT_ROOT).as_posix()
         posting = f"""# Job posting
 
-- **Title:** {title or 'Unknown role'}
-- **Company:** {company or 'Unknown company'}
-- **Source:** {url or 'Unknown'}
-- **Captured:** {datetime.now().astimezone().isoformat(timespec='seconds')}
+- **Title:** {title or "Unknown role"}
+- **Company:** {company or "Unknown company"}
+- **Source:** {url or "Unknown"}
+- **Captured:** {datetime.now().astimezone().isoformat(timespec="seconds")}
 
 ## Description
 
@@ -222,31 +346,35 @@ class CaptureHandler(BaseHTTPRequestHandler):
         prompt = build_prompt(relative, instructions)
         (job_dir / "job_posting.md").write_text(posting, encoding="utf-8")
         (job_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+        store().save_application(
+            {
+                "directory": relative,
+                "title": title,
+                "company": company,
+                "url": url,
+                "status": "captured",
+                "created": datetime.now().astimezone().isoformat(),
+                "versions": [],
+            }
+        )
         self._json({"ok": True, "directory": relative, "prompt": prompt})
 
     def _start_automation(self, data: dict) -> None:
         phase = str(data.get("phase", ""))
-        if phase not in {"analyze", "generate"}:
+        if phase not in {"analyze", "generate", "revise"}:
             raise ValueError("Automation phase must be analyze or generate")
         relative_directory = markdown_value(str(data.get("directory", "")))
         resolve_job_directory(relative_directory)
         answers = markdown_value(str(data.get("answers", "")))
-        task_id = uuid.uuid4().hex
-        task = {
-            "id": task_id,
-            "phase": phase,
-            "directory": relative_directory,
-            "status": "queued",
-            "result": "",
-            "error": "",
-        }
-        with TASKS_LOCK:
-            TASKS[task_id] = task
-        threading.Thread(
-            target=run_automation,
-            args=(task_id, phase, relative_directory, answers),
-            daemon=True,
-        ).start()
+        task, created = store().start(
+            relative_directory, phase, answers, data.get("requestId")
+        )
+        if created:
+            threading.Thread(
+                target=run_automation,
+                args=(task["id"], phase, relative_directory, answers),
+                daemon=True,
+            ).start()
         self._json({"ok": True, "task": task}, HTTPStatus.ACCEPTED)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -254,12 +382,19 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global PAIRING  # noqa: PLW0603 -- one paired companion configuration per process
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    PAIRING = Pairing(PROJECT_ROOT / "cv-private" / ".job-capture" / "connection.json")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), CaptureHandler)
+    recovered = store().recover()
+    if recovered:
+        LOGGER.info(
+            "Recovered %s interrupted runs; retry explicitly after review.", recovered
+        )
     LOGGER.info("Job Capture server listening at http://127.0.0.1:%s", args.port)
     LOGGER.info("Saving applications under %s", JOBS_ROOT)
     try:

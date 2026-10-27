@@ -9,6 +9,31 @@ let currentAutomationPhase = "analyze";
 let selectionRules = {};
 let readSequence = 0;
 const RECIPES_KEY = "site-recipes:v1";
+let activeTaskId = null;
+
+async function companionFetch(url, options = {}) {
+  const token = (await chrome.storage.local.get("companionToken")).companionToken || "";
+  return fetch(url, { ...options, headers: { ...options.headers, "X-Job-Capture-Token": token } });
+}
+
+document.querySelector("#connect").addEventListener("click", async () => {
+  const input = document.querySelector("#connection-code");
+  try {
+    const response = await fetch(`${API}/pair`, { method: "POST", headers: { "X-Job-Capture-Token": input.value.trim() } });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    await chrome.storage.local.set({ companionToken: input.value.trim() });
+    input.value = "";
+    document.querySelector("#connection-status").textContent = "Connected to the local companion.";
+  } catch (error) { document.querySelector("#connection-status").textContent = error.message; }
+});
+
+document.querySelector("#cancel-run").addEventListener("click", async () => {
+  if (!activeTaskId) return;
+  const response = await companionFetch(`${API}/automation/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: activeTaskId }) });
+  const result = await response.json();
+  document.querySelector("#automation-status").textContent = response.ok ? "Cancellation requested…" : result.error;
+});
 
 function extractJobPage(picked = null) {
   const cleanInline = (value) => String(value || "")
@@ -282,6 +307,11 @@ async function readCurrentPage(requestAccess = false) {
     selectionRules = pageRules;
     currentDraftKey = `${DRAFT_PREFIX}${result.url}`;
     currentAutomationKey = `${AUTOMATION_PREFIX}${result.url}`;
+    jobDirectory = null;
+    document.querySelector("#automation").hidden = true;
+    document.querySelector("#approval").hidden = true;
+    document.querySelector("#retry").hidden = true;
+    document.querySelector("#cancel-run").hidden = true;
     const stored = await chrome.storage.local.get([currentDraftKey, currentAutomationKey]);
     const draft = stored[currentDraftKey] || {};
     selectionRules = draft.selectionRules || selectionRules;
@@ -307,7 +337,7 @@ async function readCurrentPage(requestAccess = false) {
         document.querySelector("#approval").hidden = false;
       } else if (automation.status === "running" || automation.status === "queued") {
         pollAutomation(automation.taskId, automation.phase);
-      } else if (automation.status === "failed") {
+      } else if (["failed", "cancelled", "interrupted"].includes(automation.status)) {
         document.querySelector("#retry").textContent = automation.phase === "generate" ? "Retry generation" : "Retry analysis";
         document.querySelector("#retry").hidden = false;
       }
@@ -367,7 +397,9 @@ async function rememberAutomation(value) {
   if (currentAutomationKey) await chrome.storage.local.set({ [currentAutomationKey]: value });
 }
 
-async function pollAutomation(taskId, phase) {
+async function pollAutomation(taskId, phase, scope = currentAutomationKey) {
+  if (scope !== currentAutomationKey) return;
+  activeTaskId = taskId;
   currentAutomationPhase = phase;
   const statusElement = document.querySelector("#automation-status");
   document.querySelector("#automation").hidden = false;
@@ -375,22 +407,27 @@ async function pollAutomation(taskId, phase) {
   document.querySelector("#retry").hidden = true;
   statusElement.textContent = phase === "analyze" ? "Codex is analyzing the application…" : "Codex is generating and rendering the documents…";
   try {
-    const response = await fetch(`${API}/automation/status?id=${encodeURIComponent(taskId)}`);
+    const response = await companionFetch(`${API}/automation/status?id=${encodeURIComponent(taskId)}`);
     const data = await response.json();
+    if (scope !== currentAutomationKey) return;
     if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
     const task = data.task;
-    if (task.status === "queued" || task.status === "running") {
+    if (["queued", "running", "cancelling"].includes(task.status)) {
+      document.querySelector("#cancel-run").hidden = false;
       await rememberAutomation({ taskId, phase, directory: jobDirectory, status: task.status, result: "" });
-      setTimeout(() => pollAutomation(taskId, phase), 2000);
+      setTimeout(() => pollAutomation(taskId, phase, scope), 2000);
       return;
     }
-    if (task.status === "failed") throw new Error(task.error || "Codex automation failed.");
+    document.querySelector("#cancel-run").hidden = true;
+    if (["failed", "cancelled", "interrupted"].includes(task.status)) throw new Error(task.error || `Run ${task.status}.`);
     document.querySelector("#automation-output").value = task.result;
     statusElement.textContent = phase === "analyze" ? "Analysis complete. Review it before approving generation." : "Generation finished. Review the files listed below.";
     if (phase === "analyze") document.querySelector("#generate").disabled = false;
     document.querySelector("#approval").hidden = phase !== "analyze";
     await rememberAutomation({ taskId, phase, directory: jobDirectory, status: "complete", result: task.result });
   } catch (error) {
+    if (scope !== currentAutomationKey) return;
+    document.querySelector("#cancel-run").hidden = true;
     statusElement.textContent = `Automation error: ${error.message}`;
     document.querySelector("#retry").textContent = phase === "generate" ? "Retry generation" : "Retry analysis";
     document.querySelector("#retry").hidden = false;
@@ -406,10 +443,10 @@ async function startAutomation(phase, answers = "") {
   document.querySelector("#automation-output").value = "";
   document.querySelector("#approval").hidden = true;
   document.querySelector("#retry").hidden = true;
-  const response = await fetch(`${API}/automation/start`, {
+  const response = await companionFetch(`${API}/automation/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phase, directory: jobDirectory, answers })
+    body: JSON.stringify({ phase, directory: jobDirectory, answers, requestId: crypto.randomUUID() })
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
@@ -497,7 +534,7 @@ document.querySelector("#capture").addEventListener("click", async () => {
     const active = await activeJobTab();
     if (active.url !== capturedPage.url) throw new Error("The page changed. Read the current page before capturing.");
     await saveDraft();
-    const response = await fetch(`${API}/capture`, {
+    const response = await companionFetch(`${API}/capture`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

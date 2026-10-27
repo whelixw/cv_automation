@@ -137,7 +137,7 @@ test('panel requires review, saves edited description and prevents capture after
       body: fs.readFileSync(path.join(extension, name), 'utf8')
     });
   });
-  await page.goto('http://extension.test/popup.html');
+  await page.goto('https://extension.test/popup.html');
   await page.waitForFunction(() => document.querySelector('#description').value === 'Original description');
   // Reproduce a persistent panel on a new domain before Chrome exposes Tab.url.
   await page.evaluate(() => { delete window.fakeTab.url; });
