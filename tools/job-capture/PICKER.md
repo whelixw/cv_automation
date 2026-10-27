@@ -7,7 +7,9 @@ reading the page still uses the separate site-access permission.
 
 1. Click **Select description on page**. Allow access to that site if requested.
 2. Point to the description. Press **↑** to select its enclosing section or **↓**
-   to select its first child. Click or press **Enter** to choose; **Esc** cancels.
+   to select its first child. Click sections to include them, Alt+click sections to
+   exclude, then press **Enter** to finish. Click a section again to undo it.
+   **Esc** cancels. Use the field selector to pick the role and company separately.
 3. Review the editable description, role and company. You can paste or correct text.
 4. Check the review box and click **Capture and analyze**. Generation still requires
    its separate approval after analysis.
@@ -18,8 +20,16 @@ navigating to a different URL is blocked until you read the current page again.
 Cancelling selection leaves the draft alone. The picker automatically cancels after
 two minutes or when the page unloads.
 
-This slice selects one section in the main document. Split selections, field mapping,
-saved site recipes, iframe content and shadow-root traversal are future work. Browser
+Under **Saved site rules**, confirm the URL path pattern and save your page selections.
+The star matches any characters in the URL path; hostname matching is exact. Read
+another matching posting to apply the rule. Existing drafts keep your manual edits.
+Disable/delete old rules there; repick fields and save the same pattern to repair
+one. Rules contain selectors, not captured personal content, and stay local.
+Missing/ambiguous selectors or conflicting matching rules leave the description empty.
+Positional selectors can break when layouts change; always review the preview.
+
+The picker works in the main document. Iframe content and shadow-root traversal are
+future work. Browser
 internal pages and pages that disallow extension access cannot be selected. Choose
 another enclosing section or use pasted text if a page's markup extracts poorly.
 

@@ -80,6 +80,31 @@ test('leaving the page cancels an active picker', async t => {
   assert.equal(await page.locator('[data-rendercv-picker]').count(), 0);
 });
 
+test('multiple sections, exclusions and saved rules work on another posting and fail closed on layout changes', async t => {
+  const page = await jobPage(t);
+  await page.evaluate(() => { window.pickResult = rendercvPickElement({ multiple: true }); });
+  await page.locator('#intro').click();
+  await page.locator('#description ul').click();
+  await page.locator('#description li').first().click({ modifiers: ['Alt'] });
+  await page.keyboard.press('Enter');
+  const picked = await page.evaluate(() => window.pickResult);
+  assert.equal(picked.include.length, 2);
+  assert.equal(picked.exclude.length, 1);
+  const extracted = await page.evaluate(value => extractJobPage(value), picked);
+  assert.match(extracted.description, /Analyze data/);
+  assert.match(extracted.description, /Explain results/);
+  assert.doesNotMatch(extracted.description, /Build reliable tools/);
+  const recipe = { rules: [{ field: 'description', include: picked.include, exclude: picked.exclude }] };
+  await page.locator('#intro').evaluate(node => { node.textContent = 'A different posting on this site.'; });
+  const second = await page.evaluate(value => rendercvReadRecipe(value), recipe);
+  assert.match(second.fields.description.text, /different posting/);
+  assert.doesNotMatch(second.fields.description.text, /Build reliable tools/);
+  await page.locator('#intro').evaluate(node => node.remove());
+  const broken = await page.evaluate(value => rendercvReadRecipe(value), recipe);
+  assert.match(broken.error, /selection has changed/);
+  assert.equal(broken.fields, undefined);
+});
+
 test('panel requires review, saves edited description and prevents capture after navigation', async t => {
   const browser = await browserFor(t);
   const page = await browser.newPage({ viewport: { width: 380, height: 850 } });

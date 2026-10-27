@@ -13,6 +13,9 @@
         <button id="refresh" class="secondary">Read current page</button>
         <button id="pick" class="secondary">Select description on page</button>
       </div>
+      <label>Select from page
+        <select id="pick-field"><option value="description">Description (multiple sections)</option><option value="title">Role</option><option value="company">Company</option></select>
+      </label>
       <label>Role <input id="title" autocomplete="off"></label>
       <label>Company <input id="company" autocomplete="organization"></label>
       <label>One-off instructions <textarea id="instructions" rows="4" placeholder="E.g. emphasize Python and bioinformatics"></textarea></label>
@@ -21,6 +24,11 @@
         <textarea id="description" rows="12" placeholder="Read the page, select a section, or paste the job description here."></textarea>
       </label>
       <label class="confirmation"><input id="confirm-description" type="checkbox"> I have checked the role, company, and description.</label>
+      <details><summary>Saved site rules</summary>
+        <label>Pages to match <input id="recipe-path" placeholder="/jobs/*"></label>
+        <button id="save-recipe" class="secondary">Save current page selections</button>
+        <p id="recipe-status" role="status"></p><div id="recipes"></div>
+      </details>
       <button id="capture">Capture and analyze</button>
       <p id="status" role="status"></p>
       <section id="automation" hidden>

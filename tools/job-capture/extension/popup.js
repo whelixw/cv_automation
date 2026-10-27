@@ -6,6 +6,9 @@ let currentDraftKey = null;
 let currentAutomationKey = null;
 let jobDirectory = null;
 let currentAutomationPhase = "analyze";
+let selectionRules = {};
+let readSequence = 0;
+const RECIPES_KEY = "site-recipes:v1";
 
 function extractJobPage(picked = null) {
   const cleanInline = (value) => String(value || "")
@@ -207,6 +210,7 @@ async function saveDraft() {
       company: document.querySelector("#company").value,
       instructions: document.querySelector("#instructions").value,
       description: document.querySelector("#description").value,
+      selectionRules,
       answers: document.querySelector("#answers").value
     }
   });
@@ -231,6 +235,7 @@ async function activeJobTab() {
 }
 
 async function readCurrentPage(requestAccess = false) {
+  const sequence = ++readSequence;
   setStatus("");
   document.querySelector("#extraction").textContent = "Reading the current page…";
   try {
@@ -243,15 +248,49 @@ async function readCurrentPage(requestAccess = false) {
         if (!allowed) throw new Error("Page access was not granted.");
       }
     }
-    const [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractJobPage });
+    let [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractJobPage });
+    const url = new URL(result.url);
+    const recipes = (await chrome.storage.local.get(RECIPES_KEY))[RECIPES_KEY] || [];
+    const matches = recipes.filter(recipe => recipe.enabled && recipe.hostname === url.hostname &&
+      new RegExp(`^${recipe.path_pattern.split("*").map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(url.pathname));
+    let pageRules = {};
+    let recipeMessage = "";
+    if (matches.length > 1) { recipeMessage = "Several site rules match. Disable extras before applying one."; result.description = ""; }
+    else if (matches.length === 1) {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["picker.js"] });
+      const [{ result: saved }] = await chrome.scripting.executeScript({ target: { tabId: tab.id },
+        func: recipe => globalThis.rendercvReadRecipe(recipe), args: [matches[0]] });
+      if (saved.error || saved.url !== result.url) recipeMessage = saved.error || "The page changed. Read it again.";
+      else {
+        if (saved.fields.description) {
+          const [{ result: extracted }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractJobPage, args: [saved.fields.description] });
+          if (extracted.source !== "selected text" || !extracted.description.trim()) throw new Error("The saved description is empty. Select it again.");
+          result.description = extracted.description;
+        }
+        for (const field of ["title", "company"]) if (saved.fields[field]) result[field] = saved.fields[field].text;
+        result.source = "saved site rule";
+        pageRules = Object.fromEntries(matches[0].rules.map(({ field, ...rule }) => [field, rule]));
+        recipeMessage = "Applied saved site rule. Review all fields before capturing.";
+      }
+      // A broken recipe must not silently capture a generic page fallback.
+      if (saved.error) result.description = "";
+    }
+    if (sequence !== readSequence) return;
+    const active = await activeJobTab();
+    if (active.id !== tab.id || active.url !== result.url) throw new Error("The page changed. Read the current page again.");
     capturedPage = result;
+    selectionRules = pageRules;
     currentDraftKey = `${DRAFT_PREFIX}${result.url}`;
     currentAutomationKey = `${AUTOMATION_PREFIX}${result.url}`;
     const stored = await chrome.storage.local.get([currentDraftKey, currentAutomationKey]);
     const draft = stored[currentDraftKey] || {};
+    selectionRules = draft.selectionRules || selectionRules;
+    document.querySelector("#recipe-path").value = url.pathname.slice(0, url.pathname.lastIndexOf("/") + 1) + "*";
+    document.querySelector("#recipe-status").textContent = recipeMessage;
+    await showRecipes(url.hostname);
     document.querySelector("#title").value = draft.title || result.title;
     document.querySelector("#company").value = draft.company || result.company;
-    document.querySelector("#description").value = draft.description ?? result.description;
+    document.querySelector("#description").value = recipeMessage && result.description === "" ? "" : draft.description ?? result.description;
     document.querySelector("#confirm-description").checked = false;
     document.querySelector("#instructions").value = draft.instructions || "";
     document.querySelector("#answers").value = draft.answers || "";
@@ -274,11 +313,55 @@ async function readCurrentPage(requestAccess = false) {
       }
     }
   } catch (error) {
+    if (sequence !== readSequence) return;
     capturedPage = null;
     document.querySelector("#extraction").textContent = "Could not read the current page.";
     setStatus(`Click Read current page to grant access to this job site. ${error.message}`, "error");
   }
 }
+
+async function showRecipes(hostname) {
+  const container = document.querySelector("#recipes");
+  container.replaceChildren();
+  const recipes = (await chrome.storage.local.get(RECIPES_KEY))[RECIPES_KEY] || [];
+  for (const recipe of recipes.filter(item => item.hostname === hostname)) {
+    const row = document.createElement("div");
+    const toggle = document.createElement("button");
+    toggle.className = "secondary";
+    toggle.textContent = `${recipe.enabled ? "Disable" : "Enable"} ${recipe.path_pattern}`;
+    toggle.onclick = async () => {
+      recipe.enabled = !recipe.enabled;
+      await chrome.storage.local.set({ [RECIPES_KEY]: recipes });
+      await showRecipes(hostname);
+    };
+    const remove = document.createElement("button");
+    remove.className = "secondary";
+    remove.textContent = `Delete ${recipe.path_pattern}`;
+    remove.onclick = async () => {
+      await chrome.storage.local.set({ [RECIPES_KEY]: recipes.filter(item => item.id !== recipe.id) });
+      await showRecipes(hostname);
+    };
+    row.append(toggle, remove); container.append(row);
+  }
+}
+
+document.querySelector("#save-recipe").addEventListener("click", async () => {
+  try {
+    if (!capturedPage || !selectionRules.description) throw new Error("Select a description on the page first. Typed edits cannot be saved as page rules.");
+    const active = await activeJobTab();
+    if (active.url !== capturedPage.url) throw new Error("The page changed. Read and select it again.");
+    const url = new URL(capturedPage.url);
+    const path = document.querySelector("#recipe-path").value.trim();
+    if (!path.startsWith("/") || path.length > 500) throw new Error("Use a path such as /jobs/*.");
+    const recipes = (await chrome.storage.local.get(RECIPES_KEY))[RECIPES_KEY] || [];
+    const old = recipes.find(item => item.hostname === url.hostname && item.path_pattern === path);
+    const recipe = { schema_version: 1, id: old?.id || crypto.randomUUID(), revision: (old?.revision || 0) + 1,
+      hostname: url.hostname, path_pattern: path, rules: Object.entries(selectionRules).map(([field, rule]) => ({ field, ...rule })), enabled: true };
+    await chrome.storage.local.set({ [RECIPES_KEY]: [...recipes.filter(item => item.id !== recipe.id), recipe] });
+    await showRecipes(url.hostname);
+    document.querySelector("#recipe-status").textContent = "Saved locally. Open another matching posting and click Read current page to apply it.";
+  } catch (error) { document.querySelector("#recipe-status").textContent = error.message; }
+});
 
 async function rememberAutomation(value) {
   if (currentAutomationKey) await chrome.storage.local.set({ [currentAutomationKey]: value });
@@ -348,6 +431,7 @@ document.querySelector("#pick").addEventListener("click", async () => {
   const button = document.querySelector("#pick");
   button.disabled = true;
   try {
+    const field = document.querySelector("#pick-field").value;
     const tab = await activeJobTab();
     const pattern = permissionPattern(tab.url);
     if (!pattern) throw new Error("Open a job posting on an HTTP or HTTPS page first.");
@@ -355,10 +439,10 @@ document.querySelector("#pick").addEventListener("click", async () => {
         !await chrome.permissions.request({ origins: [pattern] })) {
       throw new Error("Page access was not granted.");
     }
-    setStatus("Point to the description on the page. Use ↑ for a larger section, Enter to select, or Esc to cancel.");
+    setStatus(field === "description" ? "Click sections to include; Alt+click to exclude. Press Enter when finished, or Esc to cancel." : `Click the ${field} on the page, or Esc to cancel.`);
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["picker.js"] });
     const [{ result: picked }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id }, func: () => globalThis.rendercvPickElement()
+      target: { tabId: tab.id }, func: options => globalThis.rendercvPickElement(options), args: [{ multiple: field === "description" }]
     });
     if (!picked || picked.cancelled) {
       setStatus(picked?.error || "Selection cancelled. Your draft is unchanged.");
@@ -378,8 +462,9 @@ document.querySelector("#pick").addEventListener("click", async () => {
       await readCurrentPage();
       if (capturedPage?.url !== result.url) throw new Error("Read the current page and try again.");
     }
-    capturedPage = { ...result, source: "visual selection" };
-    document.querySelector("#description").value = result.description;
+    if (field === "description") capturedPage = { ...capturedPage, description: result.description, source: "visual selection" };
+    document.querySelector(`#${field}`).value = field === "description" ? result.description : picked.text.trim();
+    selectionRules[field] = { include: picked.include, exclude: picked.exclude };
     document.querySelector("#confirm-description").checked = false;
     document.querySelector("#extraction").textContent = `Using your visual selection (${result.description.length.toLocaleString()} characters).`;
     await saveDraft();
