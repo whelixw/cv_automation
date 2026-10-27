@@ -13,7 +13,8 @@ let activeTaskId = null;
 
 async function companionFetch(url, options = {}) {
   const token = (await chrome.storage.local.get("companionToken")).companionToken || "";
-  return fetch(url, { ...options, headers: { ...options.headers, "X-Job-Capture-Token": token } });
+  return fetch(url, { ...options, headers: { ...options.headers, "X-Job-Capture-Token": token,
+    "X-Job-Capture-Extension": chrome.runtime?.id || "" } });
 }
 
 document.querySelector("#connect").addEventListener("click", async () => {

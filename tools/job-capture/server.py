@@ -238,7 +238,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header(
-            "Access-Control-Allow-Headers", "Content-Type, X-Job-Capture-Token"
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Job-Capture-Token, X-Job-Capture-Extension",
         )
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
@@ -248,7 +249,9 @@ class CaptureHandler(BaseHTTPRequestHandler):
             return False
         host = self.headers.get("Host", "")
         return host == f"127.0.0.1:{self.server.server_port}" and PAIRING.authorize(
-            self.headers.get("Origin", ""), self.headers.get("X-Job-Capture-Token", "")
+            self.headers.get("Origin", ""),
+            self.headers.get("X-Job-Capture-Token", ""),
+            self.headers.get("X-Job-Capture-Extension", ""),
         )
 
     def _json(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:

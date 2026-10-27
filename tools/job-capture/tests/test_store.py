@@ -66,6 +66,9 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(pairing.pair(origin, token))
         restarted = Pairing(path)
         self.assertTrue(restarted.authorize(origin, token))
+        self.assertTrue(restarted.authorize("", token, "a" * 32))
+        self.assertFalse(restarted.authorize("https://example.test", token, "a" * 32))
+        self.assertFalse(restarted.authorize("", token, "b" * 32))
         self.assertFalse(restarted.authorize(origin + "/", token))
         self.assertFalse(restarted.pair("chrome-extension://" + "b" * 32, token))
 

@@ -27,7 +27,11 @@ class Pairing:
     def valid_origin(origin):
         return bool(re.fullmatch(r"chrome-extension://[a-p]{32}", origin))
 
-    def authorize(self, origin, token):
+    def authorize(self, origin, token, extension_id=""):
+        expected_origin = "chrome-extension://" + extension_id if extension_id else ""
+        if origin and expected_origin and origin != expected_origin:
+            return False
+        origin = origin or expected_origin
         return (
             self.valid_origin(origin)
             and origin == self.config["origin"]
