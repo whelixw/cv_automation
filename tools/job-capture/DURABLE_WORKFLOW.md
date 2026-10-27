@@ -6,7 +6,9 @@ connection code into the panel. Connect once. The code is stored in extension lo
 storage and must not be included in screenshots, job postings, recipes, or logs.
 
 The companion binds only to 127.0.0.1. Private API requests require the connection
-code, the exact paired extension origin and the expected Host. New private APIs
+code, the paired extension identity and the expected Host. A supplied browser Origin
+must match that identity. Chromium can omit Origin on extension GETs; those carry
+the paired extension ID alongside the secret. New private APIs
 must use the same check. Public health exposes availability only. Setup is a direct
 local browser navigation with no cross-origin read support and no framing.
 
@@ -26,7 +28,7 @@ are left untouched rather than implicitly imported or approved.
 Use **Cancel current run** to request cancellation. The adapter checks cancellation
 while waiting and stops the launched process tree on Windows. Completed/failed run
 records are retained. Cancellation does not claim to roll back files already written;
-document version isolation is implemented in the subsequent rendering/review step.
+document version isolation is described in GENERATION.md.
 
 The database uses schema version 1. Unknown newer versions are rejected. The Store
 backup operation uses SQLite's backup API and closes both connections explicitly.

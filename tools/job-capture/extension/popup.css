@@ -25,3 +25,4 @@ select { box-sizing:border-box; padding:8px; width:100%; margin-top:5px; }
 pre { font:11px/1.5 ui-monospace,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 #page-previews img { display:block; width:100%; height:auto; margin:12px 0; border:1px solid #777; }
 #document-links a { display:block; margin:10px 0; }
+.data-note { font-size:11px; line-height:1.5; }

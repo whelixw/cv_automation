@@ -48,6 +48,10 @@ class BaselineTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.jobs = self.root / "cv-private" / "jobs"
         self.jobs.mkdir(parents=True)
+        for name in ("master_cv.yaml", "constraints.md", "cover_letter_constraints.md"):
+            (self.root / "cv-private" / name).write_text(
+                "Fictional verified facts", encoding="utf-8"
+            )
         for name, value in (
             ("PROJECT_ROOT", self.root),
             ("JOBS_ROOT", self.jobs),

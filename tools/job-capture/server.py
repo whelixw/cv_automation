@@ -10,10 +10,10 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import uuid
-from contextlib import nullcontext
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import documents
+import manage
 from agent import AgentStopped, run_agent
 from review import Review
 from security import Pairing
@@ -29,7 +30,7 @@ from workflow import analysis_prompt, build_prompt, generation_prompt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 JOBS_ROOT = PROJECT_ROOT / "cv-private" / "jobs"
-DEFAULT_CODEX_HOME = PROJECT_ROOT.parents[2] / ".codex"
+DEFAULT_CODEX_HOME = Path.home() / ".codex"
 MAX_BODY_BYTES = 2_000_000
 AUTOMATION_TIMEOUT_SECONDS = 20 * 60
 PAIRING = None
@@ -83,7 +84,17 @@ def resolve_codex_executable() -> str | None:
             return str(candidate)
         LOGGER.error("JOB_CAPTURE_CODEX_EXE does not point to a file: %s", candidate)
         return None
-    return shutil.which("codex")
+    found = shutil.which("codex")
+    if found:
+        return found
+    base = (
+        Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+        / "OpenAI/Codex/bin"
+    )
+    candidates = sorted(
+        base.glob("**/codex.exe"), key=lambda path: path.stat().st_mtime, reverse=True
+    )
+    return str(candidates[0]) if candidates else None
 
 
 def run_automation(
@@ -114,11 +125,7 @@ def run_automation(
     job = None
     destination = None
     try:
-        context = (
-            tempfile.TemporaryDirectory(prefix="job-capture-")
-            if generating
-            else nullcontext(str(PROJECT_ROOT))
-        )
+        context = tempfile.TemporaryDirectory(prefix="job-capture-")
         with context as work:
             workspace = Path(work)
             prompt = (
@@ -126,14 +133,17 @@ def run_automation(
                 if not generating
                 else generation_prompt(relative_directory, answers)
             )
+            job, protected, references = documents.prepare(
+                PROJECT_ROOT,
+                relative_directory,
+                workspace,
+                revision=phase == "revise",
+                version=(store().application(relative_directory) or {}).get(
+                    "currentVersion"
+                ),
+            )
             if generating:
                 destination = resolve_job_directory(relative_directory)
-                job, protected, references = documents.prepare(
-                    PROJECT_ROOT,
-                    relative_directory,
-                    workspace,
-                    revision=phase == "revise",
-                )
                 prompt += "\nRead reference-library/index.json and the relevant copied references. Generate sources only; do not render or run compilers. The companion will validate and render them. Create requirements.json with an items list of objects containing category and text. Include all application requirements; use an empty list only if the posting has none. Record uncertainties in tailoring_notes.md.\n"
                 if phase == "revise":
                     prompt += "Revise the existing sources according to the user notes while preserving verified facts.\n"
@@ -191,23 +201,17 @@ def run_automation(
                     raise
                 if cancelled():
                     raise AgentStopped("Run cancelled; no version was published.")
-                manifest = documents.publish(
-                    job, destination, task_id, references, requirements
+                completed = store().publish_generation(
+                    task_id,
+                    lambda: documents.publish(
+                        job, destination, task_id, references, requirements
+                    ),
+                    result.stdout.strip()
+                    or "Documents generated. Review all pages and requirements before approval.",
                 )
-                application = store().application(relative_directory)
-                if application is None:
-                    application = {
-                        "directory": relative_directory,
-                        "title": destination.name,
-                        "company": "",
-                        "versions": [],
-                    }
-                application.setdefault("versions", []).append(
-                    {"id": task_id, "created": datetime.now().astimezone().isoformat()}
-                )
-                application.update(currentVersion=task_id, status="draft_ready")
-                store().save_application(application)
-                update_task(task_id, version=manifest["id"])
+                if not completed:
+                    raise AgentStopped("Run cancelled before publication.")
+                return
             update_task(
                 task_id,
                 status="complete",
@@ -329,6 +333,16 @@ class CaptureHandler(BaseHTTPRequestHandler):
             self._json({"ok": True, "codexAvailable": bool(codex)})
         elif parsed.path == "/applications":
             self._json({"ok": True, "applications": store().applications()})
+        elif parsed.path == "/diagnostics":
+            checks = manage.diagnose(PROJECT_ROOT)
+            checks.append(
+                {
+                    "name": "Agent CLI",
+                    "ok": bool(resolve_codex_executable()),
+                    "detail": "Codex must be installed and signed in. Login state is not checked here.",
+                }
+            )
+            self._json({"ok": True, "checks": checks})
         elif parsed.path in ("/application", "/artifact", "/compare", "/export"):
             query = parse_qs(parsed.query)
             directory = query.get("directory", [""])[0]
@@ -447,10 +461,15 @@ class CaptureHandler(BaseHTTPRequestHandler):
                     "withdrawn",
                 ):
                     raise ValueError("Unsupported application tracking status")
-                app = store().application(directory)
-                app["trackingStatus"] = status
-                store().save_application(app)
+                app = store().change_application(directory, trackingStatus=status)
                 self._json({"ok": True, "application": app})
+            elif path == "/companion/stop":
+                if store().active_runs():
+                    raise ValueError(
+                        "Cancel active runs and wait for them to stop before closing the companion."
+                    )
+                self._json({"ok": True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
             else:
                 self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except (ValueError, TypeError, json.JSONDecodeError) as error:
@@ -527,11 +546,22 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global PAIRING  # noqa: PLW0603 -- one paired companion configuration per process
+    global PAIRING, PROJECT_ROOT, JOBS_ROOT  # noqa: PLW0603 -- one configured workspace per process
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--workspace", type=Path, default=PROJECT_ROOT)
     args = parser.parse_args()
+    PROJECT_ROOT = args.workspace.expanduser().resolve()
+    JOBS_ROOT = PROJECT_ROOT / "cv-private/jobs"
+    log_directory = PROJECT_ROOT / "cv-private/.job-capture"
+    log_directory.mkdir(parents=True, exist_ok=True)
+    handlers = [logging.FileHandler(log_directory / "companion.log", encoding="utf-8")]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.INFO, format="%(message)s", handlers=handlers, force=True
+    )
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
     PAIRING = Pairing(PROJECT_ROOT / "cv-private" / ".job-capture" / "connection.json")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), CaptureHandler)
@@ -546,6 +576,8 @@ def main() -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         LOGGER.info("Stopping server.")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

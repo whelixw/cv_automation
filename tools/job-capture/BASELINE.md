@@ -37,7 +37,7 @@ Use the existing README startup and unpacked-extension instructions.
    if needed; do not confuse successful generation with final approval.
 7. Stop the companion and confirm the UI offers an actionable error/manual fallback.
 
-Known limitations: task state is in memory and does not survive service restart;
+Original prototype limitations (superseded by the feature guides): task state was in memory and does not survive service restart;
 PDF validation depends on agent behavior; there is no integrated revision history,
 picker, recipe library, paired authentication or installable distribution yet.
 

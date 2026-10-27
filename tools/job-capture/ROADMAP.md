@@ -2,12 +2,22 @@
 
 Status: proposed plan, based on the existing prototype and product direction discussed on 20 October 2026. Phases describe delivery order, not committed dates.
 
-Implementation progress (21 October 2026): architecture decisions, draft v1 contracts,
-offline companion baseline, and shared prompt guidance are implemented. The first
-picker slice provides one-section selection, editable capture preview, review
-confirmation, and browser fixture tests; see `PICKER.md`. Phase 0's live
-browser-to-agent-to-PDF baseline remains unverified. Phase 1's field mapping,
-multiple blocks/exclusions, and real-site acceptance checks remain outstanding.
+Implementation progress (27 October 2026): architecture/contracts, multiple-section
+capture/exclusions, field selection and local site recipes are implemented. Runs now
+use SQLite with recovery/idempotency/cancellation and paired companion access.
+Analysis and generation use isolated copied inputs; controlled RenderCV/Tectonic
+builds publish preserved document versions. History, previews, revision, comparison,
+requirements, approval, final export and manual application tracking are implemented.
+Developer installation packaging, readiness checks and private backup/restore are
+available. Read the linked feature guides for limitations and usage.
+
+Verification includes offline/browser fixtures, private HTTP tests, deterministic
+agent orchestration tests and real fictional CV/LaTeX rendering with inspected page
+previews. The user confirmed basic Jobindex capture before this update. Live agent
+acceptance, changed-layout acceptance on real sites and clean Windows installation
+remain open. Phase 5 is developer packaging only: managed runtimes, signing, automatic
+upgrade rollback and public browser-store distribution remain release gates in
+`INSTALLATION.md`. No phase is considered release-complete solely because code exists.
 
 ## Product vision
 
@@ -17,7 +27,7 @@ RenderCV and LaTeX remain first-class source formats and generation tools. Their
 
 Initial target: one user on Windows with Chrome, using the existing local agent integration. Design interfaces for additional agents and browsers, but prove the complete workflow with one supported configuration first. Browser support and distribution requirements must be verified against official documentation during implementation.
 
-## Existing foundation
+## Original prototype foundation
 
 - Manifest V3 extension with a persistent side panel, per-URL drafts, optional site permissions, LinkedIn extraction, structured JobPosting extraction, and selected-text fallback.
 - Local Python service that saves application folders and launches the installed agent CLI for analysis and generation.
@@ -25,7 +35,7 @@ Initial target: one user on Windows with Chrome, using the existing local agent 
 - Master CV, CV constraints, cover-letter constraints, and optional approved personal snippets.
 - RenderCV YAML for the CV, LaTeX for the cover letter, and separate output folders for builds and visual QA.
 
-Gaps include a visual picker, reusable site recipes, durable task state (current task state is in memory), integrated previews and revisions, a managed reference library, and a normal installation/update experience.
+At planning time, gaps included a visual picker, reusable site recipes, durable task state (current task state is in memory), integrated previews and revisions, a managed reference library, and a normal installation/update experience.
 
 ## Intended user journey
 

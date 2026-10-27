@@ -64,12 +64,77 @@ class Store:
                 (application["directory"], json.dumps(application), now()),
             )
 
+    def change_application(self, directory, **changes):
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            app = json.loads(
+                db.execute(
+                    "SELECT payload FROM applications WHERE directory=?", (directory,)
+                ).fetchone()[0]
+            )
+            app.update(changes)
+            db.execute(
+                "UPDATE applications SET payload=?,updated=? WHERE directory=?",
+                (json.dumps(app), now(), directory),
+            )
+            return app
+
+    def publish_generation(self, task_id, publish, result):
+        # Serialize cancellation/approval/start against the short publication step.
+        # An orphan filesystem version after a crash is never implicitly approved.
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            task = json.loads(
+                db.execute(
+                    "SELECT payload FROM runs WHERE id=?", (task_id,)
+                ).fetchone()[0]
+            )
+            if task["status"] in ("cancelling", "cancelled", "interrupted"):
+                return False
+            publish()
+            row = db.execute(
+                "SELECT payload FROM applications WHERE directory=?",
+                (task["directory"],),
+            ).fetchone()
+            app = (
+                json.loads(row[0])
+                if row
+                else {
+                    "directory": task["directory"],
+                    "title": task["directory"].split("/")[-1],
+                    "company": "",
+                    "versions": [],
+                }
+            )
+            app.setdefault("versions", []).append({"id": task_id, "created": now()})
+            app.update(currentVersion=task_id, status="draft_ready")
+            db.execute(
+                "INSERT INTO applications VALUES (?,?,?) ON CONFLICT(directory) DO UPDATE SET payload=excluded.payload,updated=excluded.updated",
+                (task["directory"], json.dumps(app), now()),
+            )
+            task.update(status="complete", version=task_id, result=result)
+            db.execute(
+                "UPDATE runs SET status='complete',payload=?,updated=? WHERE id=?",
+                (json.dumps(task), now(), task_id),
+            )
+            self._event(db, task)
+            return True
+
     def applications(self):
         with self.connection() as db:
             return [
                 json.loads(row[0])
                 for row in db.execute(
                     "SELECT payload FROM applications ORDER BY updated DESC"
+                )
+            ]
+
+    def active_runs(self):
+        with self.connection() as db:
+            return [
+                row[0]
+                for row in db.execute(
+                    "SELECT id FROM runs WHERE status IN ('queued','running','cancelling')"
                 )
             ]
 
@@ -92,6 +157,10 @@ class Store:
 
     def start(self, directory, phase, answers="", request_id=None):
         request_id = request_id or uuid.uuid4().hex
+        if not isinstance(request_id, str) or len(request_id) > 200:
+            raise ValueError("Invalid automation request ID")
+        if phase not in ("analyze", "generate", "revise"):
+            raise ValueError("Unsupported automation phase")
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute(

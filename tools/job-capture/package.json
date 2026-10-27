@@ -2,7 +2,7 @@
   "name": "rendercv-job-capture-dev",
   "private": true,
   "scripts": {
-    "test": "node --test tests/picker.test.cjs"
+    "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"

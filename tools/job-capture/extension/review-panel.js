@@ -99,11 +99,21 @@ async function openApplication(directory, version = null) {
   }
   const notes = await artifactBlob(directory, current, "tailoring_notes.md");
   if (sequence !== reviewSequence) return;
-  document.querySelector("#tailoring-notes").textContent = await notes.text();
+  const notesText = await notes.text();
+  if (sequence !== reviewSequence) return;
+  document.querySelector("#tailoring-notes").textContent = notesText;
   reviewMessage(data.application.approvedVersion === current ? "This version is approved and ready to export." : "Review all pages and requirements before approving this version.");
 }
 
 bindReview("refresh-history", () => refreshApplicationHistory());
+bindReview("diagnose", async () => {
+  const data = await reviewApi("/diagnostics");
+  document.querySelector("#diagnostics").textContent = data.checks.map(check => `${check.ok ? "Ready" : "Needs attention"}: ${check.name}\n${check.detail}`).join("\n\n");
+});
+bindReview("stop-companion", async () => {
+  await reviewApi("/companion/stop", {});
+  document.querySelector("#connection-status").textContent = "Companion stopped. Restart it from its launcher when ready.";
+});
 document.querySelector("#history-search").addEventListener("input", applicationOptions);
 document.querySelector("#application-list").addEventListener("change", event => {
   if (event.target.value) openApplication(event.target.value).catch(error => reviewMessage(error.message));
@@ -135,6 +145,7 @@ async function runSaved(phase, notes = "") {
 }
 bindReview("analyze-saved", () => runSaved("analyze"));
 bindReview("revise", () => {
+  if (reviewData?.manifest?.id !== reviewData?.application.currentVersion) throw new Error("Select the latest version before requesting a revision.");
   const notes = document.querySelector("#revision-notes").value.trim();
   if (!notes) throw new Error("Describe the revision you want first.");
   return runSaved("revise", notes);

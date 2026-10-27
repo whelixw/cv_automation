@@ -336,7 +336,7 @@ async function readCurrentPage(requestAccess = false) {
       if (automation.status === "complete" && automation.phase === "analyze") {
         document.querySelector("#generate").disabled = false;
         document.querySelector("#approval").hidden = false;
-      } else if (automation.status === "running" || automation.status === "queued") {
+      } else if (["running", "queued", "cancelling"].includes(automation.status)) {
         pollAutomation(automation.taskId, automation.phase);
       } else if (["failed", "cancelled", "interrupted"].includes(automation.status)) {
         document.querySelector("#retry").textContent = automation.phase === "generate" ? "Retry generation" : "Retry analysis";
@@ -441,6 +441,7 @@ async function pollAutomation(taskId, phase, scope = currentAutomationKey) {
 }
 
 async function startAutomation(phase, answers = "", directory = jobDirectory, scope = currentAutomationKey) {
+  if (!directory) throw new Error("Choose a saved application or capture the current posting first.");
   currentAutomationPhase = phase;
   if (phase === "analyze") document.querySelector("#generate").disabled = false;
   document.querySelector("#automation").hidden = false;

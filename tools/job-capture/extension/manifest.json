@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RenderCV Job Capture",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Capture a job posting and prepare a RenderCV tailoring prompt.",
   "permissions": ["activeTab", "tabs", "scripting", "clipboardWrite", "sidePanel", "storage"],
   "host_permissions": [

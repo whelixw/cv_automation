@@ -81,7 +81,7 @@ def reference_index(project):
     return entries
 
 
-def prepare(project, relative, workspace, revision=False):
+def prepare(project, relative, workspace, revision=False, version=None):
     protected = {}
     (workspace / "cv-private").mkdir(parents=True)
     for name in (
@@ -97,6 +97,12 @@ def prepare(project, relative, workspace, revision=False):
             msg = f"Set up cv-private/{name} before generation."
             raise ValueError(msg)
         target = workspace / "cv-private" / name
+        if name == "master_cv.yaml" and re.search(
+            r"(?m)^\s*name:\s*Your Name\s*$", source.read_text(encoding="utf-8")
+        ):
+            raise ValueError(
+                "Replace the starter master CV with verified personal information before analysis or generation."
+            )
         shutil.copyfile(source, target)
         protected[target] = digest(target)
     if (project / "AGENTS.md").exists():
@@ -110,7 +116,12 @@ def prepare(project, relative, workspace, revision=False):
         else ()
     )
     for name in originals:
-        source = contained(project, project / relative / name)
+        base = project / relative
+        if revision and version and name not in ("job_posting.md", "prompt.md"):
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", version):
+                raise ValueError("Invalid revision base version")
+            base = base / "versions" / version
+        source = contained(project, base / name)
         if source.exists():
             shutil.copyfile(source, job / name)
     references = reference_index(project)
