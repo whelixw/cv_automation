@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -21,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 import documents
 from agent import AgentStopped, run_agent
+from review import Review
 from security import Pairing
 from store import Store
 from workflow import analysis_prompt, build_prompt, generation_prompt
@@ -269,6 +271,24 @@ class CaptureHandler(BaseHTTPRequestHandler):
             self._headers(HTTPStatus.FORBIDDEN)
 
     def do_GET(self) -> None:
+        try:
+            self._get()
+        except (ValueError, OSError, TypeError, KeyError) as error:
+            self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+
+    def _binary(self, data, mime, name):
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'inline; filename="{name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", ""))
+        self.send_header("Vary", "Origin")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _get(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/setup" and PAIRING is not None:
             if (
@@ -304,6 +324,50 @@ class CaptureHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             codex = resolve_codex_executable()
             self._json({"ok": True, "codexAvailable": bool(codex)})
+        elif parsed.path == "/applications":
+            self._json({"ok": True, "applications": store().applications()})
+        elif parsed.path in ("/application", "/artifact", "/compare", "/export"):
+            query = parse_qs(parsed.query)
+            directory = query.get("directory", [""])[0]
+            version = query.get("version", [None])[0]
+            review = Review(PROJECT_ROOT, store())
+            if parsed.path == "/application":
+                self._json({"ok": True, **review.details(directory, version)})
+            elif parsed.path == "/artifact":
+                path = review.artifact(directory, version, query.get("path", [""])[0])
+                if path.suffix.lower() not in (
+                    ".pdf",
+                    ".png",
+                    ".txt",
+                    ".md",
+                    ".yaml",
+                    ".tex",
+                    ".json",
+                    ".log",
+                ):
+                    raise ValueError("Unsupported preview format")
+                self._binary(
+                    path.read_bytes(),
+                    mimetypes.guess_type(path.name)[0] or "text/plain",
+                    path.name,
+                )
+            elif parsed.path == "/export":
+                self._binary(
+                    review.export(directory, version),
+                    "application/zip",
+                    "application.zip",
+                )
+            else:
+                self._json(
+                    {
+                        "ok": True,
+                        "diff": review.compare(
+                            directory,
+                            query.get("left", [""])[0],
+                            query.get("right", [""])[0],
+                        ),
+                    }
+                )
         elif parsed.path == "/automation/status":
             task_id = parse_qs(parsed.query).get("id", [""])[0]
             payload = store().task(task_id)
@@ -358,6 +422,32 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 if task["status"] in ("queued", "running"):
                     task = store().update(task["id"], status="cancelling")
                 self._json({"ok": True, "task": task})
+            elif path == "/application/approve":
+                data = self._request_json()
+                app = Review(PROJECT_ROOT, store()).approve(
+                    str(data.get("directory", "")),
+                    data.get("version"),
+                    data.get("reviewed"),
+                )
+                self._json({"ok": True, "application": app})
+            elif path == "/application/status":
+                data = self._request_json()
+                directory = str(data.get("directory", ""))
+                Review(PROJECT_ROOT, store()).job(directory)
+                status = data.get("status")
+                if status not in (
+                    "not_submitted",
+                    "submitted",
+                    "interview",
+                    "offer",
+                    "rejected",
+                    "withdrawn",
+                ):
+                    raise ValueError("Unsupported application tracking status")
+                app = store().application(directory)
+                app["trackingStatus"] = status
+                store().save_application(app)
+                self._json({"ok": True, "application": app})
             else:
                 self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except (ValueError, TypeError, json.JSONDecodeError) as error:

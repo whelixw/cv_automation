@@ -225,3 +225,34 @@ class Store:
     def backup(self, destination: Path):
         with self.connection() as db, closing(sqlite3.connect(destination)) as target:
             db.backup(target)
+
+    def approve(self, directory, version, manifest_hash):
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            app = json.loads(
+                db.execute(
+                    "SELECT payload FROM applications WHERE directory=?", (directory,)
+                ).fetchone()[0]
+            )
+            runs = db.execute(
+                "SELECT id,status FROM runs WHERE directory=?", (directory,)
+            ).fetchall()
+            if app.get("currentVersion") != version or any(
+                row["status"] in ("queued", "running", "cancelling") for row in runs
+            ):
+                raise ValueError(
+                    "The application changed during review; refresh before approval."
+                )
+            if not any(
+                row["id"] == version and row["status"] == "complete" for row in runs
+            ):
+                raise ValueError("Only completed document versions can be approved.")
+            app.setdefault("approvals", []).append(
+                {"version": version, "time": now(), "manifestHash": manifest_hash}
+            )
+            app.update(approvedVersion=version, status="approved")
+            db.execute(
+                "UPDATE applications SET payload=?,updated=? WHERE directory=?",
+                (json.dumps(app), now(), directory),
+            )
+            return app

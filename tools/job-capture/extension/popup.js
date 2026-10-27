@@ -330,7 +330,7 @@ async function readCurrentPage(requestAccess = false) {
       jobDirectory = automation.directory;
       currentAutomationPhase = automation.phase;
       document.querySelector("#automation").hidden = false;
-      document.querySelector("#automation-title").textContent = automation.phase === "generate" ? "Generation result" : "Tailoring analysis";
+      document.querySelector("#automation-title").textContent = automation.phase !== "analyze" ? "Generation result" : "Tailoring analysis";
       document.querySelector("#automation-output").value = automation.result || "";
       if (automation.status === "complete" && automation.phase === "analyze") {
         document.querySelector("#generate").disabled = false;
@@ -393,8 +393,8 @@ document.querySelector("#save-recipe").addEventListener("click", async () => {
   } catch (error) { document.querySelector("#recipe-status").textContent = error.message; }
 });
 
-async function rememberAutomation(value) {
-  if (currentAutomationKey) await chrome.storage.local.set({ [currentAutomationKey]: value });
+async function rememberAutomation(value, key = currentAutomationKey) {
+  if (key) await chrome.storage.local.set({ [key]: value });
 }
 
 async function pollAutomation(taskId, phase, scope = currentAutomationKey) {
@@ -414,7 +414,8 @@ async function pollAutomation(taskId, phase, scope = currentAutomationKey) {
     const task = data.task;
     if (["queued", "running", "cancelling"].includes(task.status)) {
       document.querySelector("#cancel-run").hidden = false;
-      await rememberAutomation({ taskId, phase, directory: jobDirectory, status: task.status, result: "" });
+      statusElement.textContent = task.message || `Run ${task.status}…`;
+      await rememberAutomation({ taskId, phase, directory: task.directory || jobDirectory, status: task.status, result: "" }, scope);
       setTimeout(() => pollAutomation(taskId, phase, scope), 2000);
       return;
     }
@@ -424,7 +425,10 @@ async function pollAutomation(taskId, phase, scope = currentAutomationKey) {
     statusElement.textContent = phase === "analyze" ? "Analysis complete. Review it before approving generation." : "Generation finished. Review the files listed below.";
     if (phase === "analyze") document.querySelector("#generate").disabled = false;
     document.querySelector("#approval").hidden = phase !== "analyze";
-    await rememberAutomation({ taskId, phase, directory: jobDirectory, status: "complete", result: task.result });
+    await rememberAutomation({ taskId, phase, directory: task.directory || jobDirectory, status: "complete", result: task.result }, scope);
+    if (phase !== "analyze" && typeof refreshApplicationHistory === "function") {
+      refreshApplicationHistory(task.directory || jobDirectory).catch(error => reviewMessage(error.message));
+    }
   } catch (error) {
     if (scope !== currentAutomationKey) return;
     document.querySelector("#cancel-run").hidden = true;
@@ -435,23 +439,23 @@ async function pollAutomation(taskId, phase, scope = currentAutomationKey) {
   }
 }
 
-async function startAutomation(phase, answers = "") {
+async function startAutomation(phase, answers = "", directory = jobDirectory, scope = currentAutomationKey) {
   currentAutomationPhase = phase;
   if (phase === "analyze") document.querySelector("#generate").disabled = false;
   document.querySelector("#automation").hidden = false;
-  document.querySelector("#automation-title").textContent = phase === "generate" ? "Generation result" : "Tailoring analysis";
+  document.querySelector("#automation-title").textContent = phase !== "analyze" ? "Generation result" : "Tailoring analysis";
   document.querySelector("#automation-output").value = "";
   document.querySelector("#approval").hidden = true;
   document.querySelector("#retry").hidden = true;
   const response = await companionFetch(`${API}/automation/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phase, directory: jobDirectory, answers, requestId: crypto.randomUUID() })
+    body: JSON.stringify({ phase, directory, answers, requestId: crypto.randomUUID() })
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `Server returned ${response.status}`);
-  await rememberAutomation({ taskId: data.task.id, phase, directory: jobDirectory, status: "queued", result: "" });
-  pollAutomation(data.task.id, phase);
+  await rememberAutomation({ taskId: data.task.id, phase, directory, status: "queued", result: "" }, scope);
+  pollAutomation(data.task.id, phase, scope);
 }
 
 for (const id of ["title", "company", "instructions", "answers", "description"]) {
@@ -528,6 +532,7 @@ document.querySelector("#capture").addEventListener("click", async () => {
     return;
   }
   const button = document.querySelector("#capture");
+  const capturedUrl = capturedPage.url;
   button.disabled = true;
   setStatus("Saving job posting…");
   try {
@@ -550,6 +555,7 @@ document.querySelector("#capture").addEventListener("click", async () => {
     document.querySelector("#prompt").value = data.prompt;
     document.querySelector("#result").hidden = false;
     jobDirectory = data.directory;
+    currentAutomationKey = `${AUTOMATION_PREFIX}${capturedUrl}`;
     setStatus(`Saved to ${data.directory}. Starting analysis…`, "success");
     await startAutomation("analyze");
   } catch (error) {

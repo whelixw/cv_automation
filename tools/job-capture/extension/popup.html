@@ -36,6 +36,29 @@
       </details>
       <button id="capture">Capture and analyze</button>
       <p id="status" role="status"></p>
+      <details id="history"><summary>Application history and document review</summary>
+        <button id="refresh-history" class="secondary">Refresh applications</button>
+        <label>Search <input id="history-search" type="search" placeholder="Company or role"></label>
+        <label>Application <select id="application-list"><option value="">Choose an application</option></select></label>
+        <p id="review-status" role="status"></p>
+        <section id="document-review" hidden>
+          <p id="review-info"></p>
+          <button id="analyze-saved" class="secondary">Analyze this saved application</button>
+          <label>Tracking status <select id="tracking-status"><option value="not_submitted">Not submitted</option><option value="submitted">Submitted</option><option value="interview">Interview</option><option value="offer">Offer</option><option value="rejected">Rejected</option><option value="withdrawn">Withdrawn</option></select></label>
+          <button id="save-tracking" class="secondary">Save tracking status</button>
+          <label>Document version <select id="review-version"></select></label>
+          <div id="document-links"></div><div id="page-previews"></div>
+          <h2>Submission checklist</h2><ul id="requirements"></ul>
+          <details><summary>Tailoring notes</summary><pre id="tailoring-notes"></pre></details>
+          <label>Compare with <select id="compare-version"></select></label>
+          <button id="compare" class="secondary">Compare source changes</button><pre id="version-diff"></pre>
+          <label>Revision request <textarea id="revision-notes" rows="4" placeholder="Describe the changes you want"></textarea></label>
+          <button id="revise" class="secondary">Generate a revised draft</button>
+          <label class="confirmation"><input id="reviewed-documents" type="checkbox"> I have reviewed this version's documents and submission requirements.</label>
+          <button id="approve-final" class="secondary">Approve this document version</button>
+          <button id="export-final" class="secondary" disabled>Export approved application</button>
+        </section>
+      </details>
       <section id="automation" hidden>
         <h2 id="automation-title">Tailoring analysis</h2>
         <p id="automation-status"></p>
@@ -58,5 +81,6 @@
       </section>
     </main>
     <script src="popup.js"></script>
+    <script src="review-panel.js"></script>
   </body>
 </html>
