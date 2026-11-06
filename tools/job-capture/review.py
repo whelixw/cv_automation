@@ -29,7 +29,7 @@ class Review:
         job = self.job(directory)
         folder = contained(job, job / "versions" / version)
         path = contained(folder, folder / "manifest.json")
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest = json.loads(path.read_bytes())
         if manifest.get("id") != version or manifest.get("schema_version") != 1:
             raise ValueError("Invalid document manifest")
         return folder, manifest

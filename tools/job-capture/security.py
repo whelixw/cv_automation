@@ -21,7 +21,7 @@ class Pairing:
                     )
             except FileExistsError:
                 pass
-        self.config = json.loads(path.read_text(encoding="utf-8"))
+        self.config = json.loads(path.read_bytes())
 
     @staticmethod
     def valid_origin(origin):

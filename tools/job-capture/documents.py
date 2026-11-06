@@ -47,7 +47,7 @@ def reference_index(project):
     ]
     user_index = project / "cv-private/references/index.json"
     if user_index.exists():
-        items = json.loads(user_index.read_text(encoding="utf-8"))
+        items = json.loads(user_index.read_bytes())
         if not isinstance(items, list) or len(items) > 32:
             raise ValueError("Reference index must contain at most 32 entries.")
         for item in items:
@@ -156,7 +156,7 @@ def validate_sources(job, protected):
         if not path.is_file() or not path.read_text(encoding="utf-8").strip():
             msg = f"Generation did not produce {name}."
             raise ValueError(msg)
-    requirements = json.loads((job / "requirements.json").read_text(encoding="utf-8"))
+    requirements = json.loads((job / "requirements.json").read_bytes())
     if re.search(
         r"!TEX\s+root",
         (job / "cover_letter.tex").read_text(encoding="utf-8"),

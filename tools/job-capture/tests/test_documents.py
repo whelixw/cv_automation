@@ -64,6 +64,32 @@ class DocumentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             documents.contained(job, job / "../outside")
 
+    def test_requirements_accept_windows_utf8_bom_without_modifying_source(self):
+        job, protected, _ = self.prepare()
+        path = job / "requirements.json"
+        path.write_text(
+            json.dumps({"items": [{"category": "attachment", "text": "Vedlæg CV"}]}),
+            encoding="utf-8-sig",
+        )
+        original = path.read_bytes()
+        self.assertTrue(original.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(
+            documents.validate_sources(job, protected)["items"][0]["text"], "Vedlæg CV"
+        )
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_private_reference_index_accepts_utf8_bom(self):
+        references = self.private / "references"
+        references.mkdir()
+        (references / "style.md").write_text("Approved style", encoding="utf-8")
+        (references / "index.json").write_text(
+            json.dumps([{"path": "cv-private/references/style.md"}]),
+            encoding="utf-8-sig",
+        )
+        self.assertEqual(
+            documents.reference_index(self.project)[0]["title"], "style.md"
+        )
+
     def test_versions_are_preserved_and_hashes_match(self):
         job, protected, refs = self.prepare()
         (job / "output/cv").mkdir(parents=True)
