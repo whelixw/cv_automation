@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +35,46 @@ def compiler_script():
         )
     )
     return candidates[-1] if candidates else None
+
+
+def tectonic_path(script, environment=None):
+    environment = os.environ if environment is None else environment
+    executable = "tectonic.exe" if os.name == "nt" else "tectonic"
+    candidates = [
+        environment.get("JOB_CAPTURE_TECTONIC_PATH"),
+        environment.get("CODEX_TECTONIC_PATH"),
+        str(script.parent.parent / "bin" / executable),
+        shutil.which(executable, path=environment.get("PATH", "")),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    if os.name == "nt":
+        # A manually launched companion does not inherit Codex's environment.
+        # Query the current user's registered package without enumerating the
+        # protected WindowsApps directory or pinning an app version.
+        try:
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            location = result.stdout.strip().lstrip("\ufeff")
+            if result.returncode == 0 and location:
+                candidate = Path(location) / "app/resources/tectonic/tectonic.exe"
+                if candidate.is_file():
+                    return candidate
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return None
 
 
 def reference_index(project):
@@ -183,6 +224,11 @@ def render(job, cancelled):
         raise ValueError(
             "Bundled LaTeX compiler helper is missing. Configure JOB_CAPTURE_LATEX_SCRIPT."
         )
+    tectonic = tectonic_path(script)
+    if tectonic is None:
+        raise ValueError(
+            "Bundled Tectonic was not found. Open/update the Codex desktop app, then restart the companion, or set JOB_CAPTURE_TECTONIC_PATH to its tectonic.exe."
+        )
     cv = job / "output/cv"
     letter = job / "output/cover-letter"
     qa = job / "output/qa"
@@ -219,7 +265,12 @@ def render(job, cancelled):
         ],
     ]
     environment = dict(
-        os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", NO_COLOR="1", TERM="dumb"
+        os.environ,
+        PYTHONUTF8="1",
+        PYTHONIOENCODING="utf-8",
+        NO_COLOR="1",
+        TERM="dumb",
+        CODEX_TECTONIC_PATH=str(tectonic),
     )
     for index, command in enumerate(commands):
         result = run_agent(
@@ -229,7 +280,27 @@ def render(job, cancelled):
             result.stdout + "\n" + result.stderr, encoding="utf-8"
         )
         if result.returncode:
-            msg = f"{'CV' if index == 0 else 'Cover-letter'} rendering failed. Review the private build log."
+            reason = ""
+            if index == 1:
+                try:
+                    report = json.loads(result.stdout)
+                    reason = report.get("tectonic", {}).get("reason", "")
+                    attempts = report.get("attempts", [])
+                    reason = next(
+                        (
+                            item["reason"]
+                            for item in attempts
+                            if item.get("skipped") and item.get("reason")
+                        ),
+                        reason,
+                    )
+                    if report.get("compiler"):
+                        reason = (
+                            ""  # A detected compiler failing is a different problem.
+                        )
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            msg = f"{'CV' if index == 0 else 'Cover-letter'} rendering failed. {reason} Review the private build log."
             raise ValueError(msg)
     pymupdf = importlib.import_module("pymupdf")
 

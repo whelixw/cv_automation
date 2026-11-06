@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1]), *sys.path]):
@@ -13,6 +14,27 @@ with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1]), *sys.p
 
 
 class DocumentTests(unittest.TestCase):
+    def test_manually_started_companion_discovers_registered_app_compiler(self):
+        app = self.root / "installed-app"
+        executable = app / "app/resources/tectonic/tectonic.exe"
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+        with (
+            patch.object(documents.os, "name", "nt"),
+            patch.object(documents.shutil, "which", return_value=None),
+            patch.object(
+                documents.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0, stdout=str(app) + "\n"),
+            ),
+        ):
+            self.assertEqual(
+                documents.tectonic_path(
+                    self.root / "plugin/scripts/compile_latex.py", environment={}
+                ),
+                executable,
+            )
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

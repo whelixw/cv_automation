@@ -41,6 +41,17 @@ def initialize(workspace, sources):
 
 def diagnose(workspace):
     checks = []
+    script = documents.compiler_script()
+    compiler = documents.tectonic_path(script) if script else None
+    checks.append(
+        {
+            "name": "Bundled Tectonic executable",
+            "ok": compiler is not None,
+            "detail": "Detected desktop/bundled compiler."
+            if compiler
+            else "Open/update Codex or configure JOB_CAPTURE_TECTONIC_PATH, then restart the companion.",
+        }
+    )
     for module in ("rendercv", "pymupdf"):
         found = importlib.util.find_spec(module) is not None
         checks.append(
