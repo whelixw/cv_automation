@@ -218,7 +218,29 @@ def validate_sources(job, protected):
     return requirements
 
 
+def validate_cv_layout(job):
+    library = importlib.import_module("ruamel.yaml")
+    yaml = library.YAML(typ="safe")
+    try:
+        data = yaml.load((job / "cv.yaml").read_text(encoding="utf-8-sig"))
+    except library.YAMLError as error:
+        raise ValueError("cv.yaml must contain valid RenderCV YAML.") from error
+    if not isinstance(data, dict) or not isinstance(data.get("cv"), dict):
+        raise ValueError("cv.yaml must contain a top-level cv mapping.")
+    settings = data.get("settings") or {}
+    if not isinstance(settings, dict):
+        raise ValueError("CV settings must be a YAML mapping.")
+    command = settings.get("render_command") or {}
+    if isinstance(command, dict) and any(
+        command.get(key) for key in ("design", "locale")
+    ):
+        raise ValueError(
+            "CV layout must be self-contained. Put design and locale directly in cv.yaml; remove settings.render_command.design and locale file overrides."
+        )
+
+
 def render(job, cancelled):
+    validate_cv_layout(job)
     script = compiler_script()
     if script is None:
         raise ValueError(
@@ -235,6 +257,10 @@ def render(job, cancelled):
     for directory in (cv, letter, qa):
         contained(job, directory)
         directory.mkdir(parents=True, exist_ok=True)
+    for output in (cv / "cv.pdf", letter / "cover_letter.pdf"):
+        contained(job, output)
+        if output.exists():
+            output.unlink()
     commands = [
         [
             sys.executable,
@@ -281,6 +307,8 @@ def render(job, cancelled):
         )
         if result.returncode:
             reason = ""
+            if index == 0 and "KeyError: 'design'" in result.stdout + result.stderr:
+                reason = "A layout override is missing its top-level design section. Use self-contained cv.yaml."
             if index == 1:
                 try:
                     report = json.loads(result.stdout)

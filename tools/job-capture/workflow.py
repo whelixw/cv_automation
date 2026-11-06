@@ -8,6 +8,8 @@ Highlight all other application requirements: attachments, submission instructio
 deadlines, source attribution, eligibility conditions, and start-date constraints.
 Keep RenderCV YAML as the CV source and LaTeX as the cover-letter source. When compiling
 LaTeX, explicitly use `compile_latex.py --compiler tectonic` as required by AGENTS.md.
+The generated cv.yaml must be self-contained: include design and locale directly as
+top-level sections. Do not set settings.render_command.design or locale to file paths.
 """
 
 OUTPUT_LAYOUT = """Use this output layout, with all paths relative to the job directory:

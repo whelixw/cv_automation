@@ -14,6 +14,20 @@ with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1]), *sys.p
 
 
 class DocumentTests(unittest.TestCase):
+    def test_cv_layout_rejects_external_overrides_and_accepts_inline_design(self):
+        path = self.destination / "cv.yaml"
+        path.write_text(
+            "cv:\n  name: Fictional Candidate\nsettings:\n  render_command:\n    design: schema.json\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "self-contained"):
+            documents.validate_cv_layout(self.destination)
+        path.write_text(
+            "cv:\n  name: Fictional Candidate\ndesign:\n  theme: engineeringresumes\n",
+            encoding="utf-8",
+        )
+        documents.validate_cv_layout(self.destination)
+
     def test_manually_started_companion_discovers_registered_app_compiler(self):
         app = self.root / "installed-app"
         executable = app / "app/resources/tectonic/tectonic.exe"

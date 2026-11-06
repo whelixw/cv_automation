@@ -89,3 +89,39 @@ class GenerationTests(unittest.TestCase):
             server.store().publish_generation(self.run["id"], publish, "Draft")
         )
         publish.assert_not_called()
+
+    def test_build_failure_is_repaired_before_publication(self):
+        attempts = []
+
+        def render(job, cancelled):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise ValueError("A layout override is missing its design section")
+            self.fake_render(job, cancelled)
+
+        with (
+            patch.object(server, "resolve_codex_executable", return_value="fake"),
+            patch.object(server, "run_agent", side_effect=self.fake_agent) as agent,
+            patch.object(server.documents, "render", side_effect=render),
+        ):
+            server.run_automation(self.run["id"], "generate", self.relative, "Approved")
+        self.assertEqual(agent.call_count, 2)
+        self.assertEqual(server.store().task(self.run["id"])["status"], "complete")
+        self.assertTrue(
+            (self.job / "runs" / self.run["id"] / "attempt-0-sources/cv.yaml").exists()
+        )
+
+    def test_persistent_build_failure_stops_after_two_repairs(self):
+        with (
+            patch.object(server, "resolve_codex_executable", return_value="fake"),
+            patch.object(server, "run_agent", side_effect=self.fake_agent) as agent,
+            patch.object(
+                server.documents,
+                "render",
+                side_effect=ValueError("Invalid document source"),
+            ),
+        ):
+            server.run_automation(self.run["id"], "generate", self.relative, "Approved")
+        self.assertEqual(agent.call_count, 3)
+        self.assertEqual(server.store().task(self.run["id"])["status"], "failed")
+        self.assertFalse((self.job / "versions").exists())

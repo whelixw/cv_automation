@@ -40,3 +40,10 @@ Verification: fictional CV and cover-letter sources were built through both real
 renderers on 27 October 2026; PDF text extraction and page preview inspection passed.
 This is a renderer integration check, not a live agent generation acceptance test.
 The Windows build environment explicitly uses UTF-8 for captured compiler output.
+
+Generated CVs must be self-contained: design and locale are inline sections, not
+external layout overrides. Source/build failures allow at most two agent repair
+attempts in the same isolated workspace. Protected inputs are checked again before
+each build. Cancellation, timeouts and missing bundled runtimes do not trigger source
+repair. Failed attempt sources/logs remain under runs/<run-id>/ for diagnosis.
+Only a successful final build is published, and final approval remains explicit.
