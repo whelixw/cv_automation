@@ -9,8 +9,10 @@ repos:
     hooks:
       - id: codespell
         args:
-          - --skip=src/rendercv/schema/models/locale/other_locales/*
+          - --skip=*.md,src/rendercv/schema/models/locale/other_locales/*
           - --exclude-file=schema.json
+          # Danish words used in the public cover-letter template.
+          - --ignore-words-list=januar,relevante
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.7
     hooks:
@@ -20,8 +22,6 @@ repos:
     hooks:
       - id: ty-check
         name: ty-check
-        language: python
-        entry: ty check src tests
+        language: system
+        entry: uv run --frozen --all-extras ty check src tests
         pass_filenames: false
-        args: [--python=.venv/]
-        additional_dependencies: ["ty>=0.0.24"]
