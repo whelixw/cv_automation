@@ -3,6 +3,7 @@ name: Claude Issue Triage
 # When a new issue is opened, Claude analyzes it and posts a comment.
 # Requires: Install the Claude GitHub App (https://github.com/apps/claude)
 # and add ANTHROPIC_API_KEY to repository secrets.
+# Set the CLAUDE_ENABLED repository variable to true after setup.
 
 on:
   issues:
@@ -10,6 +11,7 @@ on:
 
 jobs:
   triage:
+    if: vars.CLAUDE_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

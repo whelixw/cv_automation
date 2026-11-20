@@ -3,6 +3,7 @@ name: Claude PR Review
 # When a PR is opened or updated, Claude reviews it.
 # Requires: Install the Claude GitHub App (https://github.com/apps/claude)
 # and add ANTHROPIC_API_KEY to repository secrets.
+# Set the CLAUDE_ENABLED repository variable to true after setup.
 
 on:
   pull_request:
@@ -10,6 +11,7 @@ on:
 
 jobs:
   review:
+    if: vars.CLAUDE_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

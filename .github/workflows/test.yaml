@@ -1,5 +1,8 @@
 name: Test
 
+permissions:
+  contents: read
+
 # GitHub events that trigger the workflow:
 on:
   push:
@@ -77,6 +80,9 @@ jobs:
     name: Generate the coverage report
     needs: [test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
 
     steps:
       - uses: actions/checkout@v6

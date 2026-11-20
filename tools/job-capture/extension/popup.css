@@ -8,7 +8,7 @@ input, textarea { box-sizing: border-box; display: block; font: inherit; margin-
 button { background: #2867b2; border: 0; border-radius: 6px; color: white; cursor: pointer; font-weight: 600; padding: 10px 12px; width: 100%; }
 button:disabled { cursor: wait; opacity: .6; }
 .secondary { background: #555; margin-top: 8px; }
-.toolbar { display: flex; justify-content: flex-end; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .toolbar button { font-size: 12px; margin: 0; padding: 7px 10px; width: auto; }
 #extraction, #status { font-size: 12px; line-height: 1.4; }
 #status.error { color: #d33; }
@@ -18,3 +18,11 @@ button:disabled { cursor: wait; opacity: .6; }
 #automation-status { font-size: 12px; }
 details { margin-top: 14px; }
 summary { cursor: pointer; font-size: 12px; }
+.confirmation { display:flex; gap:8px; align-items:flex-start; line-height:1.5; }
+.confirmation input { width:auto; margin:3px 0 0; }
+#description { font-size:12px; min-height:180px; }
+select { box-sizing:border-box; padding:8px; width:100%; margin-top:5px; }
+pre { font:11px/1.5 ui-monospace,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+#page-previews img { display:block; width:100%; height:auto; margin:12px 0; border:1px solid #777; }
+#document-links a { display:block; margin:10px 0; }
+.data-note { font-size:11px; line-height:1.5; }

@@ -1,0 +1,2 @@
+rendercv[full]==2.8
+PyMuPDF==1.28.2

@@ -4,6 +4,7 @@ name: Claude
 # This is how you tell Claude "okay, make a PR" or give follow-up instructions.
 # Requires: Install the Claude GitHub App (https://github.com/apps/claude)
 # and add ANTHROPIC_API_KEY to repository secrets.
+# Set the CLAUDE_ENABLED repository variable to true after setup.
 
 on:
   issue_comment:
@@ -16,9 +17,10 @@ on:
 jobs:
   claude:
     if: |
+      vars.CLAUDE_ENABLED == 'true' && (
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')))
     runs-on: ubuntu-latest
     permissions:
       contents: write

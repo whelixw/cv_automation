@@ -1,0 +1,239 @@
+// Run with node --test tools/job-capture/tests/picker.test.cjs.
+// Requires Playwright and an installed Chrome, or PLAYWRIGHT_CHROMIUM_EXECUTABLE.
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('playwright');
+const root = path.resolve(__dirname, '..');
+const extension = path.join(root, 'extension');
+const source = fs.readFileSync(path.join(extension, 'popup.js'), 'utf8');
+const extractor = source.slice(source.indexOf('function extractJobPage'), source.indexOf('function setStatus'));
+const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/picker-job.html'), 'utf8');
+
+test('manifest permits URL discovery before requesting access to a new site', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.permissions.includes('tabs'));
+  assert.ok(manifest.optional_host_permissions.includes('https://*/*'));
+  assert.ok(!manifest.host_permissions.includes('https://*/*'));
+});
+
+async function browserFor(t) {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    headless: true
+  });
+  t.after(() => browser.close());
+  return browser;
+}
+
+async function jobPage(t) {
+  const browser = await browserFor(t);
+  const page = await browser.newPage();
+  await page.route('**/*', route => route.fulfill({ contentType: 'text/html', body: fixture }));
+  await page.goto('https://jobs.example.test/analyst');
+  await page.addScriptTag({ path: path.join(extension, 'picker.js') });
+  await page.addScriptTag({ content: extractor });
+  return page;
+}
+
+test('picker chooses parent block, preserves Markdown and excludes surrounding/hidden content', async t => {
+  const page = await jobPage(t);
+  await page.evaluate(() => { window.pickResult = rendercvPickElement(); });
+  await page.locator('#intro').hover();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Enter');
+  const picked = await page.evaluate(() => window.pickResult);
+  assert.equal(picked.cancelled, false);
+  const extracted = await page.evaluate(picked => extractJobPage(picked), picked);
+  assert.match(extracted.description, /## About this role/);
+  assert.match(extracted.description, /- Build reliable tools/);
+  assert.match(extracted.description, /\[Application instructions\]\(https:\/\/jobs.example.test\/apply\)/);
+  assert.doesNotMatch(extracted.description, /distraction|Recommended|Navigation|Unrelated|Apply now/);
+  assert.equal(await page.locator('[data-rendercv-picker]').count(), 0);
+});
+
+test('click is intercepted and cancellation/repeated activation clean up listeners', async t => {
+  const page = await jobPage(t);
+  await page.evaluate(() => { window.pickResult = rendercvPickElement(); });
+  await page.locator('#apply').click();
+  assert.equal((await page.evaluate(() => window.pickResult)).cancelled, false);
+  assert.equal(await page.evaluate(() => window.linkActivated), undefined);
+  await page.evaluate(() => { window.first = rendercvPickElement(); window.second = rendercvPickElement(); });
+  assert.equal((await page.evaluate(() => window.first)).cancelled, true);
+  assert.equal(await page.locator('[data-rendercv-picker]').count(), 1);
+  await page.keyboard.press('Escape');
+  assert.equal((await page.evaluate(() => window.second)).cancelled, true);
+  assert.equal(await page.locator('[data-rendercv-picker]').count(), 0);
+  await page.locator('#apply').evaluate(element => element.addEventListener('click', event => event.preventDefault()));
+  await page.locator('#apply').click();
+  assert.equal(await page.evaluate(() => window.linkActivated), true);
+});
+
+test('leaving the page cancels an active picker', async t => {
+  const page = await jobPage(t);
+  await page.evaluate(() => {
+    window.pickResult = rendercvPickElement();
+    window.dispatchEvent(new Event('pagehide'));
+  });
+  assert.equal((await page.evaluate(() => window.pickResult)).cancelled, true);
+  assert.equal(await page.locator('[data-rendercv-picker]').count(), 0);
+});
+
+test('multiple sections, exclusions and saved rules work on another posting and fail closed on layout changes', async t => {
+  const page = await jobPage(t);
+  await page.evaluate(() => { window.pickResult = rendercvPickElement({ multiple: true }); });
+  await page.locator('#intro').click();
+  await page.locator('#description ul').click();
+  await page.locator('#description li').first().click({ modifiers: ['Alt'] });
+  await page.keyboard.press('Enter');
+  const picked = await page.evaluate(() => window.pickResult);
+  assert.equal(picked.include.length, 2);
+  assert.equal(picked.exclude.length, 1);
+  const extracted = await page.evaluate(value => extractJobPage(value), picked);
+  assert.match(extracted.description, /Analyze data/);
+  assert.match(extracted.description, /Explain results/);
+  assert.doesNotMatch(extracted.description, /Build reliable tools/);
+  const recipe = { rules: [{ field: 'description', include: picked.include, exclude: picked.exclude }] };
+  await page.locator('#intro').evaluate(node => { node.textContent = 'A different posting on this site.'; });
+  const second = await page.evaluate(value => rendercvReadRecipe(value), recipe);
+  assert.match(second.fields.description.text, /different posting/);
+  assert.doesNotMatch(second.fields.description.text, /Build reliable tools/);
+  await page.locator('#intro').evaluate(node => node.remove());
+  const broken = await page.evaluate(value => rendercvReadRecipe(value), recipe);
+  assert.match(broken.error, /selection has changed/);
+  assert.equal(broken.fields, undefined);
+});
+
+test('panel requires review, saves edited description and prevents capture after navigation', async t => {
+  const browser = await browserFor(t);
+  const page = await browser.newPage({ viewport: { width: 380, height: 850 } });
+  const captures = [];
+  await page.addInitScript(() => {
+    window.fakeTab = { id: 7, url: 'https://jobs.example.test/analyst' };
+    window.drafts = {};
+    window.chrome = {
+      tabs: { query: async () => [window.fakeTab] },
+      permissions: { contains: async () => true, request: async () => true },
+      storage: { local: { get: async () => window.drafts, set: async value => Object.assign(window.drafts, value) } },
+      scripting: { executeScript: async () => [{ result: {
+        url: window.fakeTab.url, title: 'Analyst', company: 'Example Company',
+        description: 'Original description', source: 'page text'
+      } }] }
+    };
+  });
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/capture') {
+      captures.push(route.request().postDataJSON());
+      return route.fulfill({ json: { ok: true, directory: 'cv-private/jobs/example', prompt: 'Example prompt' } });
+    }
+    if (url.pathname === '/automation/start') return route.fulfill({ json: { task: { id: 'fake-run' } } });
+    if (url.pathname === '/automation/status') return route.fulfill({ json: { task: { status: 'complete', result: 'Review emphasis' } } });
+    const name = path.basename(url.pathname);
+    if (!['popup.html', 'popup.js', 'popup.css', 'review-panel.js'].includes(name)) return route.abort();
+    return route.fulfill({
+      contentType: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html',
+      body: fs.readFileSync(path.join(extension, name), 'utf8')
+    });
+  });
+  await page.goto('https://extension.test/popup.html');
+  await page.waitForFunction(() => document.querySelector('#description').value === 'Original description');
+  // Reproduce a persistent panel on a new domain before Chrome exposes Tab.url.
+  await page.evaluate(() => { delete window.fakeTab.url; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Reload the extension'));
+  assert.doesNotMatch(await page.locator('#status').textContent(), /Invalid URL/);
+  await page.locator('#pick').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Reload the extension'));
+  await page.evaluate(() => { window.fakeTab.url = 'chrome://extensions'; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('HTTP or HTTPS'));
+  await page.evaluate(() => { window.fakeTab.url = 'https://jobs.example.test/analyst'; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#description').value === 'Original description' && !document.querySelector('#status').textContent);
+  await page.evaluate(() => {
+    chrome.permissions.contains = async () => false;
+    chrome.permissions.request = async () => false;
+  });
+  await page.locator('#pick').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('access was not granted'));
+  assert.equal(await page.locator('#description').inputValue(), 'Original description');
+  await page.evaluate(() => {
+    chrome.permissions.contains = async () => true;
+    const original = chrome.scripting.executeScript;
+    chrome.scripting.executeScript = async request => {
+      if (request.files) return [];
+      if (request.func.name !== 'extractJobPage') return [{ result: { cancelled: true } }];
+      return original(request);
+    };
+  });
+  await page.locator('#pick').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Selection cancelled'));
+  assert.equal(await page.locator('#description').inputValue(), 'Original description');
+  await page.locator('#capture').click();
+  assert.equal(captures.length, 0);
+  await page.locator('#description').fill('Reviewed and edited description');
+  await page.locator('#confirm-description').check();
+  await page.locator('#title').fill('Revised analyst');
+  assert.equal(await page.locator('#confirm-description').isChecked(), false);
+  await page.locator('#confirm-description').check();
+  await page.locator('#capture').click();
+  await page.waitForFunction(() => document.querySelector('#automation-output').value === 'Review emphasis');
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].description, 'Reviewed and edited description');
+  assert.equal(captures[0].title, 'Revised analyst');
+  const stored = await page.evaluate(() => window.drafts['draft:https://jobs.example.test/analyst']);
+  assert.equal(stored.description, 'Reviewed and edited description');
+  if (process.env.JOB_CAPTURE_SCREENSHOT) await page.screenshot({ path: process.env.JOB_CAPTURE_SCREENSHOT, fullPage: true });
+  await page.evaluate(() => { window.fakeTab.url = 'https://jobs.example.test/other'; });
+  await page.locator('#capture').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('page changed'));
+  assert.equal(captures.length, 1);
+});
+
+test('history displays requirements, source comparison and explicit final approval', async t => {
+  const browser = await browserFor(t);
+  const page = await browser.newPage({ viewport: { width: 380, height: 850 } });
+  let approved = false;
+  const directory = 'cv-private/jobs/example';
+  const application = () => ({ directory, title: 'Analyst', company: 'Example', status: 'draft_ready', currentVersion: 'v2',
+    approvedVersion: approved ? 'v2' : null, versions: [{ id: 'v1', created: 'Earlier' }, { id: 'v2', created: 'Latest' }] });
+  await page.addInitScript(() => {
+    window.chrome = { tabs: { query: async () => [{ id: 7, url: 'https://jobs.example.test/analyst' }] },
+      storage: { local: { get: async () => ({ companionToken: 'fictional-token' }), set: async () => {} } },
+      scripting: { executeScript: async () => [{ result: { url: 'https://jobs.example.test/analyst', title: 'Analyst', company: 'Example', description: 'Fictional description', source: 'page text' } }] } };
+  });
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/applications') return route.fulfill({ json: { applications: [application()] } });
+    if (url.pathname === '/application') return route.fulfill({ json: { application: application(), runs: [], manifest: {
+      id: url.searchParams.get('version') || 'v2', requirements: { items: [{ category: 'attachment', text: 'Include a writing sample' }] },
+      artifacts: [{ path: 'output/cv/cv.pdf' }]
+    } } });
+    if (url.pathname === '/artifact') return route.fulfill({ body: url.searchParams.get('path').endsWith('.md') ? 'Fictional tailoring notes' : 'Fictional PDF content' });
+    if (url.pathname === '/compare') return route.fulfill({ json: { diff: '- Old profile\n+ Revised profile' } });
+    if (url.pathname === '/application/approve') {
+      const body = route.request().postDataJSON();
+      assert.equal(body.version, 'v2'); assert.equal(body.reviewed, true);
+      assert.equal(route.request().headers()['x-job-capture-token'], 'fictional-token');
+      approved = true; return route.fulfill({ json: { application: application() } });
+    }
+    const name = path.basename(url.pathname);
+    if (!['popup.html', 'popup.js', 'popup.css', 'review-panel.js'].includes(name)) return route.abort();
+    return route.fulfill({ contentType: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html', body: fs.readFileSync(path.join(extension, name), 'utf8') });
+  });
+  await page.goto('https://extension.test/popup.html');
+  await page.locator('#history > summary').click();
+  await page.locator('#refresh-history').click();
+  await page.locator('#application-list').selectOption(directory);
+  await page.waitForFunction(() => document.querySelector('#tailoring-notes').textContent === 'Fictional tailoring notes');
+  assert.match(await page.locator('#requirements').textContent(), /writing sample/);
+  assert.equal(await page.locator('#export-final').isDisabled(), true);
+  await page.locator('#compare').click();
+  await page.waitForFunction(() => document.querySelector('#version-diff').textContent.includes('Revised profile'));
+  await page.locator('#reviewed-documents').check();
+  await page.locator('#approve-final').click();
+  await page.waitForFunction(() => !document.querySelector('#export-final').disabled);
+  assert.equal(approved, true);
+});

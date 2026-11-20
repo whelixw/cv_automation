@@ -190,6 +190,9 @@ bin/
 
 # Local development tools and generated smoke-test output:
 .tools/
+/tmp/
+.env.*
+!.env.example
 examples/local-smoke-output/
 
 # Private CV source material and tailored applications. This repository is public.

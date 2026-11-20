@@ -1,0 +1,20 @@
+[
+  {
+    "url": "https://jobs.example.test/openings/analyst",
+    "title": "Data Analyst",
+    "company": "Example Research",
+    "description": "## Responsibilities\n\n- Analyze public datasets.\n- Explain findings.\n\n## Apply\n\nInclude a CV and cover letter. [Application details](https://jobs.example.test/apply).",
+    "method": "structured",
+    "confirmed": true,
+    "captured_at": "2026-10-20T10:00:00+02:00"
+  },
+  {
+    "url": "https://careers.example.test/roles/engineer",
+    "title": "Research Engineer",
+    "company": "Example Laboratory",
+    "description": "## Role\n\nBuild reproducible tools.\n\n## Requirements\n\nPython experience.\n\n## Submission\n\nAttach a writing sample. State availability in your cover letter.",
+    "method": "selection",
+    "confirmed": true,
+    "captured_at": "2026-10-20T10:05:00+02:00"
+  }
+]
