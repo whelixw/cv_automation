@@ -22,6 +22,7 @@ repos:
     hooks:
       - id: ty-check
         name: ty-check
+        # Use uv.lock rather than resolving a separate, newer ty on every CI run.
         language: system
         entry: uv run --frozen --all-extras ty check src tests
         pass_filenames: false
